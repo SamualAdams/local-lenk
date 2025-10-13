@@ -296,9 +296,45 @@ class FileViewer:
         self.dictation_process = None
         self.dictation_temp_file = None
 
+        # Comment narration state
+        self.narrate_comments = False  # Toggle for auto-narration
+        self.narration_queue = []  # Queue of comments to narrate
+        self.is_narrating = False  # Currently narrating flag
+        self.narration_process = None  # Current narration subprocess
+
         # Populate trees
         self.populate_tree()
         self.populate_favorites()
+
+        # Restore previous session
+        self.restore_session()
+
+    def restore_session(self):
+        """Restore the previous session state"""
+        saved_dir, saved_file, saved_cell = self.load_session_state()
+
+        # Restore directory if available
+        if saved_dir and os.path.isdir(saved_dir):
+            self.current_root = saved_dir
+            self.path_entry.delete(0, tk.END)
+            self.path_entry.insert(0, saved_dir)
+            self.refresh_tree()
+
+        # Restore file if available
+        if saved_file and os.path.isfile(saved_file):
+            # Use root.after to ensure UI is fully initialized
+            self.root.after(100, lambda: self._restore_file_and_cell(saved_file, saved_cell))
+
+    def _restore_file_and_cell(self, file_path, cell_index):
+        """Helper method to restore file and cell position"""
+        try:
+            self.display_file(file_path)
+            # Navigate to saved cell if it exists
+            if self.cells and 0 <= cell_index < len(self.cells):
+                self.current_cell = cell_index
+                self.display_current_cell()
+        except Exception as e:
+            print(f"Error restoring session: {e}")
 
     def init_database(self):
         """Initialize SQLite database for starred items and comments"""
@@ -330,6 +366,15 @@ class FileViewer:
                 value TEXT NOT NULL
             )
         ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS session_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                current_directory TEXT,
+                current_file TEXT,
+                current_cell INTEGER DEFAULT 0,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         self.conn.commit()
 
     def load_settings(self):
@@ -339,6 +384,7 @@ class FileViewer:
 
         self.home_directory = settings.get('home_directory', os.path.expanduser("~"))
         self.voice_speed = int(settings.get('voice_speed', '200'))  # words per minute
+        self.openai_api_key = settings.get('openai_api_key', '')  # OpenAI API key
 
         # Update current_root if needed
         self.current_root = self.home_directory
@@ -350,6 +396,20 @@ class FileViewer:
             (key, str(value))
         )
         self.conn.commit()
+
+    def save_session_state(self):
+        """Save current session state to database"""
+        self.cursor.execute('''
+            INSERT OR REPLACE INTO session_state (id, current_directory, current_file, current_cell, last_updated)
+            VALUES (1, ?, ?, ?, CURRENT_TIMESTAMP)
+        ''', (self.current_root, self.current_file, self.current_cell))
+        self.conn.commit()
+
+    def load_session_state(self):
+        """Load session state from database"""
+        self.cursor.execute('SELECT current_directory, current_file, current_cell FROM session_state WHERE id = 1')
+        result = self.cursor.fetchone()
+        return result if result else (None, None, 0)
 
     def is_starred(self, path):
         """Check if a path is starred"""
@@ -580,10 +640,43 @@ class FileViewer:
                 command=test_voice
             ).pack(side=tk.LEFT)
 
+            # OpenAI API Key setting
+            tk.Label(
+                self.settings_panel,
+                text="OpenAI API Key:",
+                bg=self.border_color,
+                fg=self.fg_color,
+                font=('Consolas', 10, 'bold')
+            ).pack(pady=(10, 3), anchor='w')
+
+            api_frame = tk.Frame(self.settings_panel, bg=self.border_color)
+            api_frame.pack(fill=tk.X, pady=3)
+
+            self.api_key_entry = tk.Entry(
+                api_frame,
+                bg=self.bg_color,
+                fg=self.fg_color,
+                insertbackground=self.fg_color,
+                font=('Consolas', 9),
+                show="•",
+                width=35
+            )
+            self.api_key_entry.insert(0, self.openai_api_key)
+            self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            tk.Label(
+                self.settings_panel,
+                text="Used for @chat commands in comments",
+                bg=self.border_color,
+                fg="#888888",
+                font=('Consolas', 8)
+            ).pack(pady=(2, 0), anchor='w')
+
             # Save button
             def save_settings():
                 new_home = self.home_entry.get()
                 new_speed = self.speed_var.get()
+                new_api_key = self.api_key_entry.get()
 
                 if os.path.isdir(new_home):
                     self.home_directory = new_home
@@ -595,6 +688,9 @@ class FileViewer:
 
                 self.voice_speed = new_speed
                 self.save_setting('voice_speed', new_speed)
+
+                self.openai_api_key = new_api_key
+                self.save_setting('openai_api_key', new_api_key)
 
                 # Close settings panel after saving
                 self.toggle_settings()
@@ -640,6 +736,7 @@ class FileViewer:
         if os.path.isdir(path):
             self.current_root = path
             self.refresh_tree()
+            self.save_session_state()
         else:
             self.path_label.config(text=f"Error: '{path}' is not a valid directory")
 
@@ -1077,6 +1174,120 @@ class FileViewer:
 
         return 'break'
 
+    def toggle_narration(self):
+        """Toggle comment narration on/off"""
+        self.narrate_comments = not self.narrate_comments
+
+        # Stop any ongoing narration if turning off
+        if not self.narrate_comments:
+            self.stop_narration()
+            self.narration_queue = []
+
+        # Refresh display to show updated button
+        self.display_comments()
+
+    def stop_narration(self):
+        """Stop any ongoing comment narration"""
+        if self.narration_process:
+            self.narration_process.terminate()
+            self.narration_process = None
+        self.is_narrating = False
+
+    def queue_comment_narration(self, comment_text, comment_number, is_ai=False):
+        """Add a comment to the narration queue"""
+        if not self.narrate_comments:
+            return
+
+        # Add comment to queue with metadata
+        self.narration_queue.append({
+            'text': comment_text,
+            'number': comment_number,
+            'is_ai': is_ai
+        })
+
+        # Start processing queue if not already narrating
+        if not self.is_narrating:
+            self.process_narration_queue()
+
+    def process_narration_queue(self):
+        """Process the narration queue sequentially"""
+        if not self.narration_queue or not self.narrate_comments:
+            self.is_narrating = False
+            return
+
+        # Get next comment from queue
+        comment_data = self.narration_queue.pop(0)
+        self.is_narrating = True
+
+        # Narrate this comment
+        self.narrate_single_comment(
+            comment_data['text'],
+            comment_data['number'],
+            comment_data['is_ai']
+        )
+
+    def narrate_single_comment(self, comment_text, comment_number, is_ai=False):
+        """Narrate a single comment with clear audio indicator"""
+        import subprocess
+
+        # Build narration text with clear indicator
+        if is_ai:
+            # For AI responses, announce it clearly
+            intro = f"A I response. [[slnc 800]]"
+        else:
+            # For regular comments, announce comment number
+            intro = f"Comment {comment_number}. [[slnc 800]]"
+
+        # Calculate pause based on voice speed
+        base_speed = 200
+        pause_ms = int(1500 * (base_speed / self.voice_speed))  # Pause between comments
+
+        # Build full text with pause at end
+        full_text = f"{intro} {comment_text} [[slnc {pause_ms}]]"
+
+        try:
+            # Start narration
+            self.narration_process = subprocess.Popen(
+                ['say', '-r', str(self.voice_speed), full_text],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+
+            # Update path label to show which comment is being narrated
+            if is_ai:
+                self.path_label.config(text=f"🔊 Narrating AI response...")
+            else:
+                self.path_label.config(text=f"🔊 Narrating comment {comment_number}...")
+
+            # Monitor when this comment finishes
+            self.check_narration_status()
+
+        except Exception as e:
+            print(f"Narration error: {e}")
+            self.is_narrating = False
+            # Continue with queue even if this one failed
+            self.root.after(100, self.process_narration_queue)
+
+    def check_narration_status(self):
+        """Check if current comment narration is still running"""
+        if self.narration_process and self.narration_process.poll() is None:
+            # Still narrating, check again
+            self.root.after(100, self.check_narration_status)
+        else:
+            # Finished this comment
+            self.narration_process = None
+            self.is_narrating = False
+
+            # Reset path label
+            def reset_label():
+                if self.current_file:
+                    self.path_label.config(text=self.current_file)
+
+            self.root.after(100, reset_label)
+
+            # Process next comment in queue
+            self.root.after(200, self.process_narration_queue)
+
     def toggle_focus(self, event):
         """Toggle focus between left panel and reader"""
         self.focus_on_reader = not self.focus_on_reader
@@ -1224,6 +1435,7 @@ class FileViewer:
 
         self.current_cell = cell_index
         self.display_current_cell()
+        self.save_session_state()
 
     def display_current_cell(self):
         """Display only the current cell (Instagram shorts style)"""
@@ -1270,7 +1482,40 @@ class FileViewer:
             self.text_widget.insert(tk.END, "No comments yet.\n\n", 'no_comments')
 
         self.text_widget.insert(tk.END, "\n" + "─" * 80 + "\n", 'separator')
-        self.text_widget.insert(tk.END, "Type below to add a comment (Cmd+Enter to save):\n", 'instructions')
+
+        # Narrate toggle button
+        narrate_frame = tk.Frame(self.text_widget, bg=self.bg_color)
+        self.text_widget.window_create(tk.END, window=narrate_frame)
+
+        narrate_button_text = "🔊 Narrate: ON" if self.narrate_comments else "🔇 Narrate: OFF"
+        narrate_button_bg = "#4ec9b0" if self.narrate_comments else "#cccccc"
+
+        self.narrate_button = tk.Button(
+            narrate_frame,
+            text=narrate_button_text,
+            bg=narrate_button_bg,
+            fg="#000000",
+            font=('Consolas', 9, 'bold'),
+            relief=tk.RAISED,
+            padx=10,
+            pady=3,
+            cursor='hand2',
+            command=self.toggle_narration
+        )
+        self.narrate_button.pack(side=tk.LEFT, pady=5)
+
+        narrate_status = " (Comments will be read aloud)" if self.narrate_comments else ""
+        status_label = tk.Label(
+            narrate_frame,
+            text=narrate_status,
+            bg=self.bg_color,
+            fg="#888888",
+            font=('Consolas', 8)
+        )
+        status_label.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.text_widget.insert(tk.END, "\n")
+        self.text_widget.insert(tk.END, "Type a comment or '@chat <question>' to ask AI (Cmd+Enter to save):\n", 'instructions')
 
         self.comment_input = tk.Text(
             self.text_widget,
@@ -1284,14 +1529,156 @@ class FileViewer:
         self.comment_input.bind('<Command-Return>', self.save_comment)
         self.comment_input.focus_set()
 
+    def call_openai(self, prompt, cell_context, file_content, previous_comments):
+        """Call OpenAI API with the prompt, cell context, file content, and previous comments"""
+        if not self.openai_api_key:
+            return "Error: OpenAI API key not configured. Please add it in Settings."
+
+        try:
+            import json
+            import urllib.request
+            import urllib.error
+            import ssl
+
+            # Create SSL context with certifi bundle (fixes certificate verification issues on macOS)
+            try:
+                import certifi
+                ssl_context = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                # Fallback: disable SSL verification if certifi not available (not ideal but works)
+                ssl_context = ssl._create_unverified_context()
+                print("Warning: SSL verification disabled. Install certifi for secure connections.")
+
+            # Prepare the request
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.openai_api_key}"
+            }
+
+            # Build context with previous comments
+            comments_context = ""
+            if previous_comments:
+                comments_context = "\n\n## Previous Comments on This Cell:\n"
+                for i, (comment_text, created_at, confidence) in enumerate(previous_comments, 1):
+                    comments_context += f"\n{i}. {comment_text}\n"
+
+            # Build full context
+            full_context = f"""## Full File Content:
+{file_content}
+
+## Current Cell Being Discussed:
+{cell_context}
+{comments_context}
+
+## User Question:
+{prompt}"""
+
+            # Build the payload
+            payload = {
+                "model": "gpt-4",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant analyzing markdown content. The user is reviewing a markdown file and has questions about a specific section (cell). Provide concise, informative, and contextual responses based on the full file content, the current cell, and any previous comments."
+                    },
+                    {
+                        "role": "user",
+                        "content": full_context
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 500
+            }
+
+            # Make the request
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers=headers,
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                return result['choices'][0]['message']['content'].strip()
+
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8')
+            print(f"OpenAI API Error: {e.code} - {error_body}")
+            return f"Error: OpenAI API request failed ({e.code}). Check your API key."
+        except Exception as e:
+            print(f"OpenAI Error: {e}")
+            return f"Error: {str(e)}"
+
     def save_comment(self, event):
         """Save comment from input"""
         comment_text = self.comment_input.get('1.0', tk.END).strip()
         print(f"DEBUG: Saving comment: '{comment_text}'")
+
         if comment_text:
             cell_content = self.cells[self.current_cell]
-            result = self.add_comment(self.current_file, cell_content, self.current_cell, comment_text)
-            print(f"DEBUG: Add comment result: {result}")
+
+            # Check if comment starts with @chat (AI command)
+            if comment_text.lower().startswith('@chat'):
+                # Remove the @chat and get the question
+                question = comment_text[5:].strip()  # Remove '@chat'
+
+                if not question:
+                    # Show error if no question provided
+                    self.path_label.config(text="Error: Please provide a question after @chat")
+                    def reset_label():
+                        self.path_label.config(text=self.current_file)
+                    self.root.after(2000, reset_label)
+                    return 'break'
+
+                # Show loading message
+                self.path_label.config(text="🤖 Asking AI...")
+                self.root.update()
+
+                # Get previous comments for context
+                previous_comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+
+                # Get full file content
+                try:
+                    with open(self.current_file, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                except Exception as e:
+                    file_content = f"[Error reading file: {e}]"
+
+                # Call OpenAI with full context
+                ai_response = self.call_openai(question, cell_content, file_content, previous_comments)
+
+                # Save both the question and the response as comments
+                question_comment = f"@chat {question}"
+                self.add_comment(self.current_file, cell_content, self.current_cell, question_comment)
+
+                ai_comment = f"🤖 AI: {ai_response}"
+                self.add_comment(self.current_file, cell_content, self.current_cell, ai_comment)
+
+                print(f"DEBUG: AI question and response saved")
+
+                # Queue for narration if enabled
+                if self.narrate_comments:
+                    # Get total comments to determine comment numbers
+                    all_comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+                    # Queue the question (second to last comment)
+                    if len(all_comments) >= 2:
+                        self.queue_comment_narration(question, len(all_comments) - 1, is_ai=False)
+                    # Queue the AI response (last comment)
+                    self.queue_comment_narration(ai_response, len(all_comments), is_ai=True)
+
+            else:
+                # Regular comment
+                result = self.add_comment(self.current_file, cell_content, self.current_cell, comment_text)
+                print(f"DEBUG: Add comment result: {result}")
+
+                # Queue for narration if enabled
+                if self.narrate_comments and result:
+                    # Get total comments to determine comment number
+                    all_comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+                    self.queue_comment_narration(comment_text, len(all_comments), is_ai=False)
+
             print(f"DEBUG: File: {self.current_file}, Cell: {self.current_cell}")
             self.display_comments()
         else:
@@ -1360,6 +1747,9 @@ class FileViewer:
         self.cells = []
         self.current_cell = 0
         self.viewing_comments = False
+
+        # Save session state when file is opened
+        self.save_session_state()
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
