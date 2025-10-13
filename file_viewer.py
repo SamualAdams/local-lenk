@@ -288,12 +288,15 @@ class FileViewer:
         # Bind Command+Shift+Down to read comments aloud
         self.root.bind('<Command-Shift-Down>', self.read_next_comment)
 
+        # Bind Command+Shift+Left to stop comment dictation
+        self.root.bind('<Command-Shift-Left>', self.stop_comment_dictation)
+
         # Track which pane has focus
         self.focus_on_reader = False
 
         # Track comment reading state
         self.current_comment_reading_index = -1
-        self.dictation_process = None
+        self.dictation_process = None  # Process for reading comments aloud
         self.dictation_temp_file = None
 
         # Comment narration state
@@ -1117,12 +1120,38 @@ class FileViewer:
 
         return 'break'
 
+    def stop_comment_dictation(self, event=None):
+        """Stop any ongoing comment dictation"""
+        if self.dictation_process:
+            if self.dictation_process.poll() is None:
+                try:
+                    self.dictation_process.terminate()
+                except Exception as e:
+                    print(f"Dictation termination error: {e}")
+            self.dictation_process = None
+            self.current_comment_reading_index = -1
+
+            # Reset path label
+            if self.current_file:
+                self.path_label.config(text=self.current_file)
+
+        return 'break'
+
     def read_next_comment(self, event):
         """Read the next comment aloud for the current cell"""
         if not self.current_file or not self.current_file.endswith('.md') or not self.cells:
             return 'break'
 
         import subprocess
+
+        # Stop any current dictation first
+        if self.dictation_process:
+            if self.dictation_process.poll() is None:
+                try:
+                    self.dictation_process.terminate()
+                except Exception as e:
+                    print(f"Dictation termination error: {e}")
+            self.dictation_process = None
 
         # Get comments for current cell
         cell_content = self.cells[self.current_cell]
@@ -1136,6 +1165,7 @@ class FileViewer:
                 self.path_label.config(text=self.current_file)
 
             self.root.after(2000, reset_label)
+            self.current_comment_reading_index = -1
             return 'break'
 
         # Increment to next comment
@@ -1155,7 +1185,7 @@ class FileViewer:
 
         # Read the comment
         try:
-            subprocess.Popen(
+            self.dictation_process = subprocess.Popen(
                 ['say', '-r', str(self.voice_speed), text_to_read],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL
@@ -1168,11 +1198,19 @@ class FileViewer:
                 self.path_label.config(text=self.current_file)
 
             self.root.after(3000, reset_label)
+            self.root.after(100, self.check_comment_dictation_status)
 
         except Exception as e:
             print(f"Comment reading error: {e}")
 
         return 'break'
+
+    def check_comment_dictation_status(self):
+        """Monitor comment dictation process and clear state when finished"""
+        if self.dictation_process and self.dictation_process.poll() is None:
+            self.root.after(100, self.check_comment_dictation_status)
+        else:
+            self.dictation_process = None
 
     def toggle_narration(self):
         """Toggle comment narration on/off"""
@@ -1432,6 +1470,10 @@ class FileViewer:
 
         if cell_index == self.current_cell:
             return
+
+        # Reset comment narration state when moving between cells
+        self.stop_comment_dictation()
+        self.current_comment_reading_index = -1
 
         self.current_cell = cell_index
         self.display_current_cell()
@@ -1741,6 +1783,10 @@ class FileViewer:
 
     def display_file(self, file_path):
         """Display file content"""
+        # Ensure comment dictation stops when switching files
+        self.stop_comment_dictation()
+        self.current_comment_reading_index = -1
+
         self.path_label.config(text=file_path)
         self.current_file = file_path
         self.text_widget.delete('1.0', tk.END)
