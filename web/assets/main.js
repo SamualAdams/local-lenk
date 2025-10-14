@@ -4,6 +4,10 @@ const state = {
     favorites: [],
     file: null,
     cellIndex: 0,
+    voiceSpeed: 200,
+    speaking: false,
+    utterance: null,
+    currentCommentReadIndex: -1,
 };
 
 const els = {
@@ -53,6 +57,7 @@ async function loadSettings() {
         const data = await fetchJSON('/api/settings');
         state.settings = data;
         state.directoryPath = data.current_directory || data.home_directory;
+        state.voiceSpeed = Number(data.voice_speed || 200);
         els.pathInput.value = state.directoryPath;
         updateStatus('Settings loaded');
         await loadTree(state.directoryPath);
@@ -151,7 +156,12 @@ function renderCell() {
         return;
     }
     const cell = state.file.cells[state.cellIndex];
-    els.markdownView.innerHTML = marked.parse(cell.text);
+    try {
+        els.markdownView.innerHTML = marked.parse(cell.text);
+    } catch (e) {
+        // Fallback if CDN failed
+        els.markdownView.textContent = cell.text;
+    }
     els.cellMeta.textContent = `Cell ${state.cellIndex + 1} / ${state.file.cells.length}`;
     renderComments(cell);
 }
@@ -198,6 +208,7 @@ async function saveSession() {
 
 function showPrevCell() {
     if (!state.file || !state.file.cells.length) return;
+    stopSpeaking();
     state.cellIndex = (state.cellIndex - 1 + state.file.cells.length) % state.file.cells.length;
     renderCell();
     saveSession();
@@ -205,6 +216,7 @@ function showPrevCell() {
 
 function showNextCell() {
     if (!state.file || !state.file.cells.length) return;
+    stopSpeaking();
     state.cellIndex = (state.cellIndex + 1) % state.file.cells.length;
     renderCell();
     saveSession();
@@ -219,14 +231,23 @@ async function submitComment(event) {
         return;
     }
     try {
-        await fetchJSON('/api/comments', {
-            method: 'POST',
-            body: JSON.stringify({
-                path: state.file.path,
-                cell_index: state.cellIndex,
-                comment_text: text,
-            }),
-        });
+        if (text.toLowerCase().startsWith('@chat')) {
+            const question = text.slice(5).trim();
+            if (!question) {
+                updateStatus('Please provide a question after @chat', 2000);
+                return;
+            }
+            els.commentStatus.textContent = '🤖 Asking AI…';
+            await fetchJSON('/api/ai/chat', {
+                method: 'POST',
+                body: JSON.stringify({ path: state.file.path, cell_index: state.cellIndex, question }),
+            });
+        } else {
+            await fetchJSON('/api/comments', {
+                method: 'POST',
+                body: JSON.stringify({ path: state.file.path, cell_index: state.cellIndex, comment_text: text }),
+            });
+        }
         els.commentText.value = '';
         await loadFile(state.file.path, state.cellIndex);
         els.commentStatus.textContent = 'Comment saved';
@@ -275,12 +296,60 @@ function registerEvents() {
     });
     els.prevComment.addEventListener('click', showPrevCell);
     els.nextComment.addEventListener('click', showNextCell);
-    els.stopComment.addEventListener('click', copyCurrentCell);
+    els.stopComment.addEventListener('click', stopSpeaking);
     els.commentForm.addEventListener('submit', submitComment);
     els.copyCell.addEventListener('click', copyCurrentCell);
     els.starButton.addEventListener('click', toggleStar);
     document.getElementById('open-settings').addEventListener('click', () => alert('Settings editing coming soon. Update settings.json manually.'));
     document.getElementById('export').addEventListener('click', () => alert('Export not yet implemented in web UI.'));
+
+    // Enter to go
+    els.pathInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            loadTree(els.pathInput.value.trim());
+        }
+    });
+
+    // Keyboard navigation + comment TTS parity
+    document.addEventListener('keydown', (e) => {
+        const meta = e.metaKey || e.ctrlKey; // support Cmd/Ctrl
+        if (meta && e.shiftKey && e.key === 'ArrowDown') {
+            e.preventDefault();
+            readNextComment();
+            return;
+        }
+        if (meta && e.shiftKey && e.key === 'ArrowUp') {
+            e.preventDefault();
+            readPrevComment();
+            return;
+        }
+        if (meta && e.shiftKey && e.key === 'ArrowLeft') {
+            e.preventDefault();
+            stopSpeaking();
+            return;
+        }
+
+        if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            showPrevCell();
+            return;
+        }
+        if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            showNextCell();
+            return;
+        }
+        if (e.key === 'ArrowRight') {
+            e.preventDefault();
+            document.querySelector('.comments-panel')?.scrollIntoView({ behavior: 'smooth' });
+            return;
+        }
+        if (e.key === 'ArrowLeft') {
+            e.preventDefault();
+            toggleReadCurrentCell();
+        }
+    });
 }
 
 async function init() {
@@ -289,3 +358,77 @@ async function init() {
 }
 
 window.addEventListener('DOMContentLoaded', init);
+
+// -----------------
+// TTS helpers
+// -----------------
+function getSpeechRateFromWPM(wpm) {
+    const base = 200; // 200 wpm ~ rate 1
+    const rate = (wpm || base) / base;
+    return Math.min(2.5, Math.max(0.5, rate));
+}
+
+function speak(text) {
+    if (!('speechSynthesis' in window)) {
+        updateStatus('Speech synthesis not supported in this browser', 2500);
+        return;
+    }
+    stopSpeaking();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = getSpeechRateFromWPM(state.voiceSpeed);
+    utterance.onend = () => {
+        state.speaking = false;
+        state.utterance = null;
+    };
+    state.utterance = utterance;
+    state.speaking = true;
+    window.speechSynthesis.speak(utterance);
+}
+
+function stopSpeaking() {
+    if (state.speaking && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+    }
+    state.speaking = false;
+    state.utterance = null;
+}
+
+function toggleReadCurrentCell() {
+    if (!state.file) return;
+    if (state.speaking) {
+        stopSpeaking();
+        return;
+    }
+    const cell = state.file.cells[state.cellIndex];
+    if (!cell) return;
+    // Light cleanup: strip code fences
+    const cleaned = cell.text.replace(/```[\s\S]*?```/g, '').trim();
+    if (!cleaned) return;
+    speak(cleaned);
+}
+
+function readNextComment() {
+    readRelativeComment(+1);
+}
+
+function readPrevComment() {
+    readRelativeComment(-1);
+}
+
+function readRelativeComment(direction) {
+    if (!state.file) return;
+    const cell = state.file.cells[state.cellIndex];
+    if (!cell || !cell.comments.length) {
+        updateStatus('No comments for this cell', 1500);
+        return;
+    }
+    if (state.currentCommentReadIndex === -1) {
+        state.currentCommentReadIndex = direction > 0 ? 0 : cell.comments.length - 1;
+    } else {
+        state.currentCommentReadIndex = (state.currentCommentReadIndex + direction + cell.comments.length) % cell.comments.length;
+    }
+    const idx = state.currentCommentReadIndex;
+    const comment = cell.comments[idx];
+    const prefix = `Comment ${idx + 1}. ${comment.confidence === 'fuzzy' ? 'This comment may be outdated. ' : ''}`;
+    speak(prefix + comment.text);
+}

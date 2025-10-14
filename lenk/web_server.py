@@ -119,6 +119,21 @@ def ping():
     return jsonify({"status": "ok"})
 
 
+@app.post("/api/ai/chat")
+def ai_chat():
+    data = request.get_json(force=True) or {}
+    path = data.get("path")
+    cell_index = data.get("cell_index")
+    question = (data.get("question") or "").strip()
+    if not path or cell_index is None or not question:
+        return jsonify({"error": "path, cell_index, and question are required"}), 400
+    try:
+        result = service.ask_ai_and_save(question, path, int(cell_index))
+        return jsonify(result)
+    except (FileNotFoundError, ValueError) as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 def main() -> None:
     port = int(os.environ.get("LENK_WEB_PORT", "5000"))
     app.run(host="127.0.0.1", port=port, debug=True)

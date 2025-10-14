@@ -200,3 +200,90 @@ class LenkService(DatabaseMixin):
         if voice_speed is not None:
             self.voice_speed = int(voice_speed)
             self.save_setting('voice_speed', self.voice_speed)
+
+    # ------------------------------------------------------------------
+    # AI helpers (@chat parity with desktop)
+    # ------------------------------------------------------------------
+    def call_openai(self, prompt: str, cell_context: str, file_content: str, previous_comments: List[tuple]) -> str:
+        if not getattr(self, 'openai_api_key', None):
+            return "Error: OpenAI API key not configured. Add it in Settings."
+
+        try:
+            import json
+            import urllib.request
+            import urllib.error
+            import ssl
+
+            try:
+                import certifi  # type: ignore
+                ssl_context = ssl.create_default_context(cafile=certifi.where())
+            except Exception:
+                ssl_context = ssl._create_unverified_context()
+
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.openai_api_key}",
+            }
+
+            comments_context = ""
+            if previous_comments:
+                comments_context = "\n\n## Previous Comments on This Cell:\n" + "\n".join(
+                    f"- {text}" for (text, _created, _conf) in previous_comments
+                )
+
+            full_context = f"""## Full File Content\n{file_content}\n\n## Current Cell Being Discussed\n{cell_context}{comments_context}\n\n## User Question\n{prompt}"""
+
+            payload = {
+                "model": "gpt-4",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant analyzing markdown content. Provide concise, contextual responses based on the full file content, the current cell, and previous comments.",
+                    },
+                    {"role": "user", "content": full_context},
+                ],
+                "temperature": 0.7,
+                "max_tokens": 500,
+            }
+
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
+                result = json.loads(response.read().decode("utf-8"))
+                return result["choices"][0]["message"]["content"].strip()
+        except Exception as exc:  # broad but user-facing
+            return f"Error: {exc}"
+
+    def ask_ai_and_save(self, question: str, path: str, cell_index: int) -> dict:
+        details = self.get_file_details(path)
+        if cell_index < 0 or cell_index >= len(details["cells"]):
+            raise ValueError("Cell index out of range")
+
+        cell_text = details["cells"][cell_index]["text"]
+        previous = self.get_comments(path, cell_text, cell_index)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                file_content = fh.read()
+        except Exception as exc:
+            file_content = f"[Error reading file: {exc}]"
+
+        answer = self.call_openai(question, cell_text, file_content, previous)
+
+        # Save both the question and answer as comments
+        self.add_comment(path, cell_text, cell_index, f"@chat {question}")
+        self.add_comment(path, cell_text, cell_index, f"🤖 AI: {answer}")
+
+        updated = self.get_comments(path, cell_text, cell_index)
+        return {
+            "question": question,
+            "answer": answer,
+            "comments": [
+                {"text": text, "created_at": created, "confidence": conf}
+                for (text, created, conf) in updated
+            ],
+        }
