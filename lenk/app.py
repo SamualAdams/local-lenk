@@ -1,0 +1,1570 @@
+#!/usr/bin/env python3
+"""Tkinter application wiring for the Lenk file viewer."""
+import os
+import tkinter as tk
+from tkinter import ttk
+
+from .comments import CommentAudioMixin
+from .database import DatabaseMixin
+from .navigation import NavigationStateMixin
+
+
+class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
+    def __init__(self, root):
+        self.root = root
+        self.root.title("File Viewer")
+        self.root.geometry("1200x800")
+
+        # Dark theme colors
+        self.bg_color = "#1e1e1e"
+        self.fg_color = "#d4d4d4"
+        self.select_color = "#264f78"
+        self.border_color = "#3e3e3e"
+        self.button_color = "#ffffff"
+        self.button_text_color = "#000000"
+        self.button_active_color = "#e0e0e0"
+
+        # Markdown filter state
+        self.markdown_only = tk.BooleanVar(value=False)
+
+        # Initialize database
+        self.init_database()
+
+        # Load settings
+        self.load_settings()
+
+        # Navigation state tracking
+        self.tree_state_save_job = None
+        self.tree_open_paths = set()
+        self.tree_selected_path = None
+        self.favorites_open_paths = set()
+        self.favorites_selected_path = None
+        self.load_navigation_state()
+
+        # Configure root
+        self.root.configure(bg=self.bg_color)
+
+        # Create main container
+        main_container = tk.PanedWindow(
+            root,
+            orient=tk.HORIZONTAL,
+            bg=self.bg_color,
+            sashwidth=5,
+            sashrelief=tk.FLAT
+        )
+        main_container.pack(fill=tk.BOTH, expand=True)
+
+        # Left pane - Split into favorites and file tree
+        left_frame = tk.Frame(main_container, bg=self.bg_color)
+        main_container.add(left_frame, width=300)
+
+        # Settings expanded state
+        self.settings_expanded = False
+
+        # Favorites section at top (equal size with browser)
+        favorites_frame = tk.Frame(left_frame, bg=self.bg_color)
+        favorites_frame.pack(fill=tk.BOTH, expand=True, side=tk.TOP, padx=5, pady=5)
+
+        tk.Label(
+            favorites_frame,
+            text="⭐ Favorites",
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Consolas', 11, 'bold'),
+            anchor='w'
+        ).pack(fill=tk.X, pady=(0, 5))
+
+        # Favorites tree with scrollbar
+        favorites_scroll = tk.Scrollbar(favorites_frame, bg=self.bg_color)
+        favorites_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.favorites_tree = ttk.Treeview(
+            favorites_frame,
+            yscrollcommand=favorites_scroll.set,
+            selectmode='browse'
+        )
+        self.favorites_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        favorites_scroll.config(command=self.favorites_tree.yview)
+
+        # Separator line
+        separator = tk.Frame(left_frame, bg=self.border_color, height=2)
+        separator.pack(fill=tk.X, padx=5)
+
+        # File browser section at bottom (equal size with favorites)
+        browser_frame = tk.Frame(left_frame, bg=self.bg_color)
+        browser_frame.pack(fill=tk.BOTH, expand=True, side=tk.TOP, padx=5, pady=5)
+
+        # Toolbar for file browser
+        toolbar = tk.Frame(browser_frame, bg=self.bg_color)
+        toolbar.pack(fill=tk.X, pady=(0, 5))
+
+        # Path entry for navigation
+        path_frame = tk.Frame(toolbar, bg=self.bg_color)
+        path_frame.pack(fill=tk.X, pady=(0, 5))
+
+        tk.Label(path_frame, text="Path:", bg=self.bg_color, fg=self.fg_color, font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 5))
+
+        self.path_entry = tk.Entry(
+            path_frame,
+            bg=self.border_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Consolas', 10),
+            relief=tk.FLAT,
+            highlightthickness=1,
+            highlightbackground=self.border_color,
+            highlightcolor=self.select_color
+        )
+        self.path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        self.path_entry.insert(0, self.home_directory)
+        self.path_entry.bind('<Return>', self.navigate_to_path)
+
+        nav_button = tk.Button(
+            path_frame,
+            text="Go",
+            bg=self.button_color,
+            fg=self.button_text_color,
+            activebackground=self.button_active_color,
+            activeforeground=self.button_text_color,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED,
+            padx=15,
+            pady=2,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=lambda: self.navigate_to_path(None)
+        )
+        nav_button.pack(side=tk.LEFT)
+
+        # Markdown filter toggle
+        filter_frame = tk.Frame(toolbar, bg=self.bg_color)
+        filter_frame.pack(fill=tk.X)
+
+        self.md_button = tk.Button(
+            filter_frame,
+            text="Markdown Only",
+            bg="#cccccc",
+            fg="#000000",
+            activebackground="#aaaaaa",
+            activeforeground="#000000",
+            font=('Consolas', 10),
+            relief=tk.RAISED,
+            padx=15,
+            pady=5,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=self.toggle_markdown_filter
+        )
+        self.md_button.pack(side=tk.LEFT)
+
+        # File tree with scrollbar
+        tree_scroll = tk.Scrollbar(browser_frame, bg=self.bg_color)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.tree = ttk.Treeview(
+            browser_frame,
+            yscrollcommand=tree_scroll.set,
+            selectmode='browse'
+        )
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        tree_scroll.config(command=self.tree.yview)
+
+        # Settings panel (collapsible) at bottom
+        self.settings_panel = tk.Frame(left_frame, bg=self.border_color, relief=tk.FLAT)
+        # Don't pack yet - will show on toggle
+
+        # Full-width settings button at bottom
+        self.settings_button = tk.Button(
+            left_frame,
+            text="⚙️ Settings",
+            bg="#cccccc",
+            fg="#000000",
+            activebackground="#aaaaaa",
+            activeforeground="#000000",
+            font=('Consolas', 10),
+            relief=tk.RAISED,
+            pady=8,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=self.toggle_settings
+        )
+        self.settings_button.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+
+        # Style the treeview
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure(
+            "Treeview",
+            background=self.bg_color,
+            foreground=self.fg_color,
+            fieldbackground=self.bg_color,
+            borderwidth=0
+        )
+        style.map('Treeview',
+                  background=[('selected', self.select_color)],
+                  foreground=[('selected', self.fg_color)])
+        style.configure("Treeview.Heading",
+                       background=self.border_color,
+                       foreground=self.fg_color,
+                       borderwidth=0)
+
+        # Configure tag for favorite items - this won't gray out the path,
+        # but we can use a dimmer color for the entire row
+        # Note: tkinter ttk.Treeview doesn't support styling parts of text in a cell
+        # So we'll rely on spacing to de-emphasize the path
+
+        # Right pane - File content viewer
+        right_frame = tk.Frame(main_container, bg=self.bg_color)
+        main_container.add(right_frame)
+
+        # File path label
+        self.path_label = tk.Label(
+            right_frame,
+            text="Select a file to view",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 10),
+            anchor='w',
+            padx=10,
+            pady=5
+        )
+        self.path_label.pack(fill=tk.X)
+
+        # Text widget with scrollbar for file content
+        text_frame = tk.Frame(right_frame, bg=self.bg_color)
+        text_frame.pack(fill=tk.BOTH, expand=True)
+
+        text_scroll = tk.Scrollbar(text_frame, bg=self.bg_color)
+        text_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.text_widget = tk.Text(
+            text_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            selectbackground=self.select_color,
+            font=('Consolas', 11),
+            wrap=tk.WORD,
+            padx=10,
+            pady=10,
+            yscrollcommand=text_scroll.set
+        )
+        self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        text_scroll.config(command=self.text_widget.yview)
+
+        # Bind tree selection events
+        self.tree.bind('<<TreeviewSelect>>', self.on_file_select)
+        self.tree.bind('<Button-2>', self.toggle_star)  # Right-click
+        self.tree.bind('<Button-3>', self.toggle_star)  # Right-click (alternative)
+        self.tree.bind('<Control-Button-1>', self.toggle_star)  # Ctrl+Click
+        self.tree.bind('<<TreeviewOpen>>', self.on_folder_open)
+        self.tree.bind('<<TreeviewClose>>', self.on_folder_close)
+
+        # Bind favorites tree selection events
+        self.favorites_tree.bind('<<TreeviewSelect>>', self.on_file_select)
+        self.favorites_tree.bind('<Button-2>', self.toggle_star)  # Right-click
+        self.favorites_tree.bind('<Button-3>', self.toggle_star)  # Right-click (alternative)
+        self.favorites_tree.bind('<Control-Button-1>', self.toggle_star)  # Ctrl+Click
+        self.favorites_tree.bind('<<TreeviewOpen>>', self.on_folder_open)
+        self.favorites_tree.bind('<<TreeviewClose>>', self.on_folder_close)
+
+        # Cell navigation for markdown
+        self.cells = []  # List of cell content (text)
+        self.current_cell = 0
+        self.current_file = None
+        self.viewing_comments = False
+        self.reading_mode = False
+        self.tts_process = None
+
+        # Bind arrow keys globally
+        self.root.bind('<Up>', self.on_arrow_key)
+        self.root.bind('<Down>', self.on_arrow_key)
+        self.root.bind('<Left>', self.on_arrow_key)
+        self.root.bind('<Right>', self.on_arrow_key)
+
+        # Bind Command+/ to toggle focus
+        self.root.bind('<Command-slash>', self.toggle_focus)
+
+        # Bind Command+E to export annotated version
+        self.root.bind('<Command-e>', self.save_annotated_file)
+
+        # Bind Command+R to refresh tree
+        self.root.bind('<Command-r>', self.refresh_tree_manual)
+
+        # Bind Command+Shift+Up to read the previous comment aloud
+        self.root.bind('<Command-Shift-Up>', self.read_previous_comment)
+
+        # Bind Command+Shift+Down to read the next comment aloud
+        self.root.bind('<Command-Shift-Down>', self.read_next_comment)
+
+        # Bind Command+Shift+Left to stop comment dictation
+        self.root.bind('<Command-Shift-Left>', self.stop_comment_dictation)
+
+        # Track which pane has focus
+        self.focus_on_reader = False
+
+        # Track comment reading state
+        self.current_comment_reading_index = -1
+        self.dictation_process = None  # Process for reading comments aloud
+        self.dictation_temp_file = None
+
+        # Comment narration state
+        self.narrate_comments = False  # Toggle for auto-narration
+        self.narration_queue = []  # Queue of comments to narrate
+        self.is_narrating = False  # Currently narrating flag
+        self.narration_process = None  # Current narration subprocess
+
+        # Populate trees
+        self.populate_tree()
+        self.populate_favorites()
+
+        # Restore previous session
+        self.restore_session()
+
+        # Reapply navigation state for tree views
+        self.restore_navigation_state()
+        self.schedule_navigation_state_save()
+
+    def restore_session(self):
+        """Restore the previous session state"""
+        saved_dir, saved_file, saved_cell = self.load_session_state()
+
+        # Restore directory if available
+        if saved_dir and os.path.isdir(saved_dir):
+            self.current_root = saved_dir
+            self.path_entry.delete(0, tk.END)
+            self.path_entry.insert(0, saved_dir)
+            self.refresh_tree()
+
+        # Restore file if available
+        if saved_file and os.path.isfile(saved_file):
+            # Use root.after to ensure UI is fully initialized
+            self.root.after(100, lambda: self._restore_file_and_cell(saved_file, saved_cell))
+
+    def _restore_file_and_cell(self, file_path, cell_index):
+        """Helper method to restore file and cell position"""
+        try:
+            self.display_file(file_path)
+            # Navigate to saved cell if it exists
+            if self.cells and 0 <= cell_index < len(self.cells):
+                self.current_cell = cell_index
+                self.display_current_cell()
+        except Exception as e:
+            print(f"Error restoring session: {e}")
+
+    def populate_favorites(self):
+        """Populate favorites tree with starred items"""
+        self.favorites_tree.delete(*self.favorites_tree.get_children())
+
+        # Configure favorites tree with no extra columns (simpler approach)
+        self.favorites_tree['columns'] = ()
+        self.favorites_tree.column('#0', width=400)
+
+        starred_paths = self.get_starred_items()
+
+        for path in starred_paths:
+            if os.path.exists(path):
+                name = os.path.basename(path)
+                is_dir = os.path.isdir(path)
+
+                # Show directory path in a muted way with visual separator
+                dir_path = os.path.dirname(path)
+                # Use subtle separator and lighter color indicator
+                display_text = f'⭐ {name}  ‹ {dir_path}'
+
+                node = self.favorites_tree.insert(
+                    '',
+                    'end',
+                    text=display_text,
+                    values=[path],
+                    open=is_dir and path in self.favorites_open_paths,
+                    tags=('favorite',)
+                )
+
+                if is_dir and path in self.favorites_open_paths:
+                    self.populate_favorites_subtree(node, path)
+                elif is_dir:
+                    self.favorites_tree.insert(node, 'end', text='Loading...')
+
+        self.restore_navigation_state()
+        self.schedule_navigation_state_save()
+
+    def toggle_star(self, event):
+        """Toggle star on selected item"""
+        # Determine which tree was clicked
+        widget = event.widget
+        item = widget.identify_row(event.y)
+        if not item:
+            return
+
+        values = widget.item(item)['values']
+        if not values:
+            return
+
+        path = values[0]
+
+        if self.is_starred(path):
+            self.remove_star(path)
+        else:
+            self.add_star(path)
+
+        # Refresh both trees
+        self.update_tree_item_display(item, path, widget)
+        self.populate_favorites()
+        if widget == self.tree:
+            self.refresh_tree()
+
+    def update_tree_item_display(self, item, path, widget):
+        """Update tree item to show star status"""
+        current_text = widget.item(item)['text']
+        base_name = current_text.replace('⭐ ', '')
+
+        if self.is_starred(path):
+            widget.item(item, text=f'⭐ {base_name}')
+        else:
+            widget.item(item, text=base_name)
+
+    def toggle_settings(self):
+        """Toggle settings panel visibility"""
+        if self.settings_expanded:
+            # Collapse settings
+            self.settings_panel.pack_forget()
+            self.settings_expanded = False
+            self.settings_button.config(
+                bg="#cccccc",
+                fg="#000000",
+                font=('Consolas', 10)
+            )
+        else:
+            # Expand settings
+            self.settings_expanded = True
+            self.settings_button.config(
+                bg=self.button_color,
+                fg=self.button_text_color,
+                font=('Consolas', 10, 'bold')
+            )
+
+            # Clear and rebuild settings panel
+            for widget in self.settings_panel.winfo_children():
+                widget.destroy()
+
+            self.settings_panel.config(bg=self.border_color, padx=10, pady=10)
+            self.settings_panel.pack(side=tk.BOTTOM, fill=tk.X, before=self.settings_button, padx=5, pady=(0, 5))
+
+            # Home Directory setting
+            tk.Label(
+                self.settings_panel,
+                text="Home Directory:",
+                bg=self.border_color,
+                fg=self.fg_color,
+                font=('Consolas', 10, 'bold')
+            ).pack(pady=(5, 3), anchor='w')
+
+            home_frame = tk.Frame(self.settings_panel, bg=self.border_color)
+            home_frame.pack(fill=tk.X, pady=3)
+
+            self.home_entry = tk.Entry(
+                home_frame,
+                bg=self.bg_color,
+                fg=self.fg_color,
+                insertbackground=self.fg_color,
+                font=('Consolas', 9),
+                width=25
+            )
+            self.home_entry.insert(0, self.home_directory)
+            self.home_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+            def browse_directory():
+                from tkinter import filedialog
+                directory = filedialog.askdirectory(initialdir=self.home_directory)
+                if directory:
+                    self.home_entry.delete(0, tk.END)
+                    self.home_entry.insert(0, directory)
+
+            tk.Button(
+                home_frame,
+                text="...",
+                bg="#cccccc",
+                fg="#000000",
+                font=('Consolas', 9),
+                relief=tk.RAISED,
+                padx=8,
+                pady=2,
+                command=browse_directory
+            ).pack(side=tk.LEFT)
+
+            # Voice Speed setting
+            tk.Label(
+                self.settings_panel,
+                text="Voice Speed:",
+                bg=self.border_color,
+                fg=self.fg_color,
+                font=('Consolas', 10, 'bold')
+            ).pack(pady=(10, 3), anchor='w')
+
+            speed_frame = tk.Frame(self.settings_panel, bg=self.border_color)
+            speed_frame.pack(fill=tk.X, pady=3)
+
+            self.speed_var = tk.IntVar(value=self.voice_speed)
+            self.speed_label = tk.Label(
+                speed_frame,
+                text=f"{self.voice_speed} wpm",
+                bg=self.border_color,
+                fg=self.fg_color,
+                font=('Consolas', 9),
+                width=8
+            )
+            self.speed_label.pack(side=tk.LEFT, padx=(0, 5))
+
+            def update_speed_label(val):
+                self.speed_label.config(text=f"{int(float(val))} wpm")
+
+            speed_slider = tk.Scale(
+                speed_frame,
+                from_=100,
+                to=400,
+                orient=tk.HORIZONTAL,
+                variable=self.speed_var,
+                bg=self.border_color,
+                fg=self.fg_color,
+                highlightthickness=0,
+                command=update_speed_label,
+                length=130,
+                font=('Consolas', 8)
+            )
+            speed_slider.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+            def test_voice():
+                sample_text = "This is a sample of the voice speed you have selected."
+                temp_speed = self.speed_var.get()
+                # Test with the selected speed
+                import subprocess
+                try:
+                    test_process = subprocess.Popen(
+                        ['say', '-r', str(temp_speed), sample_text],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                except Exception as e:
+                    print(f"TTS test error: {e}")
+
+            tk.Button(
+                speed_frame,
+                text="Test",
+                bg="#cccccc",
+                fg="#000000",
+                font=('Consolas', 9),
+                relief=tk.RAISED,
+                padx=8,
+                pady=2,
+                command=test_voice
+            ).pack(side=tk.LEFT)
+
+            # OpenAI API Key setting
+            tk.Label(
+                self.settings_panel,
+                text="OpenAI API Key:",
+                bg=self.border_color,
+                fg=self.fg_color,
+                font=('Consolas', 10, 'bold')
+            ).pack(pady=(10, 3), anchor='w')
+
+            api_frame = tk.Frame(self.settings_panel, bg=self.border_color)
+            api_frame.pack(fill=tk.X, pady=3)
+
+            self.api_key_entry = tk.Entry(
+                api_frame,
+                bg=self.bg_color,
+                fg=self.fg_color,
+                insertbackground=self.fg_color,
+                font=('Consolas', 9),
+                show="•",
+                width=35
+            )
+            self.api_key_entry.insert(0, self.openai_api_key)
+            self.api_key_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+            tk.Label(
+                self.settings_panel,
+                text="Used for @chat commands in comments",
+                bg=self.border_color,
+                fg="#888888",
+                font=('Consolas', 8)
+            ).pack(pady=(2, 0), anchor='w')
+
+            def save_settings():
+                new_home = self.home_entry.get()
+                new_speed = self.speed_var.get()
+                new_api_key = self.api_key_entry.get()
+
+                if os.path.isdir(new_home):
+                    self.home_directory = new_home
+                    self.current_root = new_home
+                    self.save_setting('home_directory', new_home)
+                    self.path_entry.delete(0, tk.END)
+                    self.path_entry.insert(0, new_home)
+                    self.refresh_tree()
+
+                self.voice_speed = new_speed
+                self.save_setting('voice_speed', new_speed)
+
+                self.openai_api_key = new_api_key
+                self.save_setting('openai_api_key', new_api_key)
+
+                self.toggle_settings()
+
+            tk.Button(
+                self.settings_panel,
+                text="Save Settings",
+                bg=self.button_color,
+                fg=self.button_text_color,
+                font=('Consolas', 10, 'bold'),
+                relief=tk.RAISED,
+                padx=15,
+                pady=5,
+                command=save_settings
+            ).pack(pady=(10, 5))
+
+    def toggle_markdown_filter(self):
+        """Toggle markdown-only filter"""
+        self.markdown_only.set(not self.markdown_only.get())
+
+        if self.markdown_only.get():
+            self.md_button.config(
+                bg=self.button_color,
+                fg=self.button_text_color,
+                text="Markdown Only ✓",
+                font=('Consolas', 10, 'bold')
+            )
+        else:
+            self.md_button.config(
+                bg="#cccccc",
+                fg="#000000",
+                text="Markdown Only",
+                font=('Consolas', 10)
+            )
+
+        self.refresh_tree()
+
+    def navigate_to_path(self, event):
+        """Navigate to the path entered in the path entry"""
+        path = self.path_entry.get()
+        path = os.path.expanduser(path)
+
+        if os.path.isdir(path):
+            self.current_root = path
+            self.refresh_tree()
+            self.save_session_state()
+        else:
+            self.path_label.config(text=f"Error: '{path}' is not a valid directory")
+
+    def refresh_tree(self):
+        """Clear and repopulate the tree"""
+        self.tree.delete(*self.tree.get_children())
+        self.populate_tree(path=self.current_root)
+        self.restore_navigation_state()
+        self.schedule_navigation_state_save()
+
+    def refresh_tree_manual(self, event=None):
+        """Manually refresh both trees (triggered by Command+R)"""
+        self.refresh_tree()
+        self.populate_favorites()
+
+        # Show brief confirmation in path label
+        original_text = self.path_label.cget('text')
+        self.path_label.config(text="🔄 Trees refreshed")
+
+        def reset_label():
+            self.path_label.config(text=original_text)
+
+        self.root.after(1000, reset_label)
+
+        return 'break'
+
+    def populate_tree(self, parent='', path=None):
+        """Populate tree view with directory structure"""
+        if path is None:
+            path = self.current_root
+
+        try:
+            items = sorted(os.listdir(path))
+        except PermissionError:
+            return
+
+        for item in items:
+            if item.startswith('.'):
+                continue
+
+            item_path = os.path.join(path, item)
+
+            try:
+                is_dir = os.path.isdir(item_path)
+                is_markdown = item.endswith('.md')
+
+                if self.markdown_only.get():
+                    if not is_dir and not is_markdown:
+                        continue
+
+                display_name = f'⭐ {item}' if self.is_starred(item_path) else item
+                node = self.tree.insert(
+                    parent,
+                    'end',
+                    text=display_name,
+                    values=[item_path],
+                    open=False
+                )
+
+                if is_dir:
+                    if item_path in self.tree_open_paths:
+                        self.tree.item(node, open=True)
+                        self.populate_tree(node, item_path)
+                    else:
+                        self.tree.insert(node, 'end', text='Loading...')
+
+            except (PermissionError, OSError):
+                continue
+
+    def on_folder_open(self, event):
+        """Handle folder expansion"""
+        widget = event.widget
+        node = widget.focus()
+        children = widget.get_children(node)
+
+        if len(children) == 1 and widget.item(children[0])['text'] == 'Loading...':
+            widget.delete(children[0])
+            path = widget.item(node)['values'][0]
+            if widget == self.tree:
+                self.populate_tree(node, path)
+            else:
+                self.populate_favorites_subtree(node, path)
+
+        self.schedule_navigation_state_save()
+
+    def on_folder_close(self, event):
+        """Handle folder collapse events"""
+        self.schedule_navigation_state_save()
+
+    def populate_favorites_subtree(self, parent, path):
+        """Populate subtree in favorites tree"""
+        try:
+            items = sorted(os.listdir(path))
+        except PermissionError:
+            return
+
+        for item in items:
+            if item.startswith('.'):
+                continue
+
+            item_path = os.path.join(path, item)
+
+            try:
+                is_dir = os.path.isdir(item_path)
+                is_markdown = item.endswith('.md')
+
+                if self.markdown_only.get():
+                    if not is_dir and not is_markdown:
+                        continue
+
+                display_name = f'⭐ {item}' if self.is_starred(item_path) else item
+                node = self.favorites_tree.insert(
+                    parent,
+                    'end',
+                    text=display_name,
+                    values=[item_path],
+                    open=False
+                )
+
+                if is_dir:
+                    if item_path in self.favorites_open_paths:
+                        self.favorites_tree.item(node, open=True)
+                        self.populate_favorites_subtree(node, item_path)
+                    else:
+                        self.favorites_tree.insert(node, 'end', text='Loading...')
+
+            except (PermissionError, OSError):
+                continue
+
+    def on_file_select(self, event):
+        """Handle file selection"""
+        widget = event.widget
+        selected = widget.selection()
+        if not selected:
+            return
+
+        item = selected[0]
+        values = widget.item(item)['values']
+
+        if not values:
+            return
+
+        file_path = values[0]
+
+        if os.path.isfile(file_path):
+            self.display_file(file_path)
+
+        self.schedule_navigation_state_save()
+
+    def get_cell_hash(self, content):
+        """Generate hash for cell content"""
+        import hashlib
+        return hashlib.md5(content.encode('utf-8')).hexdigest()
+
+    def extract_heading(self, cell_content):
+        """Extract heading text from cell content"""
+        lines = cell_content.strip().split('\n')
+        for line in lines:
+            if line.startswith('#'):
+                return line.strip()
+        return "[No Heading]"
+
+    def get_comments(self, file_path, cell_content, cell_index):
+        """Get comments for a specific cell with fuzzy matching"""
+        heading = self.extract_heading(cell_content)
+        content_hash = self.get_cell_hash(cell_content)
+
+        # Try exact match first
+        self.cursor.execute(
+            '''SELECT id, comment_text, created_at, match_confidence 
+               FROM comments 
+               WHERE file_path = ? AND heading_text = ? AND content_hash = ?
+               ORDER BY created_at''',
+            (file_path, heading, content_hash)
+        )
+        exact_matches = self.cursor.fetchall()
+
+        if exact_matches:
+            # Update last_matched_at
+            for comment_id, *_ in exact_matches:
+                self.cursor.execute(
+                    'UPDATE comments SET last_matched_at = CURRENT_TIMESTAMP, match_confidence = ? WHERE id = ?',
+                    ('exact', comment_id)
+                )
+            self.conn.commit()
+            return [(text, created, conf) for _, text, created, conf in exact_matches]
+
+        # Try heading match only
+        self.cursor.execute(
+            '''SELECT id, comment_text, created_at, match_confidence 
+               FROM comments 
+               WHERE file_path = ? AND heading_text = ?
+               ORDER BY created_at''',
+            (file_path, heading)
+        )
+        heading_matches = self.cursor.fetchall()
+
+        if heading_matches:
+            # Update with fuzzy confidence
+            for comment_id, *_ in heading_matches:
+                self.cursor.execute(
+                    'UPDATE comments SET last_matched_at = CURRENT_TIMESTAMP, match_confidence = ? WHERE id = ?',
+                    ('fuzzy', comment_id)
+                )
+            self.conn.commit()
+            return [(text, created, 'fuzzy') for _, text, created, _ in heading_matches]
+
+        return []
+
+    def add_comment(self, file_path, cell_content, cell_index, comment_text):
+        """Add a comment to a cell"""
+        heading = self.extract_heading(cell_content)
+        content_hash = self.get_cell_hash(cell_content)
+
+        print(f"DEBUG add_comment: file={file_path}, heading={heading}, hash={content_hash[:8]}, index={cell_index}")
+
+        try:
+            self.cursor.execute(
+                '''INSERT INTO comments
+                   (file_path, heading_text, content_hash, cell_index, comment_text, match_confidence)
+                   VALUES (?, ?, ?, ?, ?, ?)''',
+                (file_path, heading, content_hash, cell_index, comment_text, 'exact')
+            )
+            self.conn.commit()
+            print("DEBUG: Comment inserted successfully")
+            return True
+        except Exception as e:
+            print(f"DEBUG: Error inserting comment: {e}")
+            return False
+
+    def stop_reading(self):
+        """Stop text-to-speech"""
+        if self.tts_process:
+            self.tts_process.terminate()
+            self.tts_process = None
+        self.reading_mode = False
+        self.display_current_cell()
+
+    def clean_text_for_reading(self, text):
+        """Clean markdown text for TTS reading"""
+        import re
+
+        # Remove code blocks entirely
+        text = re.sub(r'```[\s\S]*?```', '', text)
+
+        # Remove inline code
+        text = re.sub(r'`[^`]+`', '', text)
+
+        # Remove heading markers but keep the text
+        text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+
+        # Remove bold/italic markers
+        text = re.sub(r'\*\*\*(.+?)\*\*\*', r'\1', text)  # Bold+italic
+        text = re.sub(r'\*\*(.+?)\*\*', r'\1', text)  # Bold
+        text = re.sub(r'\*(.+?)\*', r'\1', text)  # Italic
+        text = re.sub(r'__(.+?)__', r'\1', text)  # Bold (underscore)
+        text = re.sub(r'_(.+?)_', r'\1', text)  # Italic (underscore)
+
+        # Remove links but keep text
+        text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+
+        # Remove images
+        text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', '', text)
+
+        # Remove horizontal rules
+        text = re.sub(r'^[-*_]{3,}$', '', text, flags=re.MULTILINE)
+
+        # Remove blockquote markers
+        text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+
+        # Remove list markers but keep content
+        text = re.sub(r'^\s*[-*+]\s+', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
+
+        # Remove HTML tags
+        text = re.sub(r'<[^>]+>', '', text)
+
+        # Remove strikethrough
+        text = re.sub(r'~~(.+?)~~', r'\1', text)
+
+        # Clean up excessive whitespace but preserve paragraph breaks
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+
+        # Remove empty lines at start/end
+        text = text.strip()
+
+        return text
+
+    def start_reading(self, text=None):
+        """Start reading the current cell aloud"""
+        import subprocess
+        import re
+
+        if self.reading_mode and text is None:
+            self.stop_reading()
+            return
+
+        if text is None:
+            cell_content = self.cells[self.current_cell]
+        else:
+            cell_content = text
+
+        if not cell_content.strip():
+            return  # Don't read empty content
+
+        # Calculate pause durations proportional to speed
+        # Slower speed = longer pause, faster speed = shorter pause
+        base_speed = 200
+        heading_pause_ms = int(1200 * (base_speed / self.voice_speed))  # Longer pause after headings
+        paragraph_pause_ms = int(600 * (base_speed / self.voice_speed))  # Medium pause between paragraphs
+
+        print(f"DEBUG: Reading with voice_speed={self.voice_speed} wpm, heading_pause={heading_pause_ms}ms, paragraph_pause={paragraph_pause_ms}ms")
+
+        # Process the text differently to preserve heading structure
+        lines = cell_content.split('\n')
+        processed_parts = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Check if line is a heading
+            if line.startswith('#'):
+                # Extract heading text without markdown
+                heading_text = re.sub(r'^#{1,6}\s+', '', line)
+                # Add heading with pause after
+                processed_parts.append(heading_text + f' [[slnc {heading_pause_ms}]]')
+            else:
+                # Regular text - clean markdown
+                cleaned = self.clean_text_for_reading(line)
+                if cleaned:
+                    processed_parts.append(cleaned)
+
+        # Join parts with paragraph pauses
+        text_with_pauses = f' [[slnc {paragraph_pause_ms}]] '.join(processed_parts)
+
+        # Use macOS 'say' command with voice speed
+        try:
+            self.reading_mode = True
+            cmd = ['say', '-r', str(self.voice_speed), text_with_pauses]
+            print(f"DEBUG: Running command: say -r {self.voice_speed} [text with {len(text_with_pauses)} chars]")
+            self.tts_process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            if hasattr(self, 'cells') and self.cells:
+                self.display_current_cell()  # Refresh to show reading indicator
+
+            # Monitor when reading finishes
+            self.root.after(100, self.check_reading_status)
+        except Exception as e:
+            print(f"TTS error: {e}")
+            self.reading_mode = False
+
+    def check_reading_status(self):
+        """Check if TTS is still running"""
+        if self.tts_process and self.tts_process.poll() is None:
+            # Still reading, check again
+            self.root.after(100, self.check_reading_status)
+        else:
+            # Finished reading
+            self.reading_mode = False
+            self.tts_process = None
+            self.display_current_cell()
+
+    def toggle_focus(self, event):
+        """Toggle focus between left panel and reader"""
+        self.focus_on_reader = not self.focus_on_reader
+
+        if self.focus_on_reader:
+            # Focus on reader (text widget)
+            self.text_widget.focus_set()
+        else:
+            # Focus on left panel (tree or favorites)
+            # Try to focus on the tree that has a selection, or default to main tree
+            if self.favorites_tree.selection():
+                self.favorites_tree.focus_set()
+            elif self.tree.selection():
+                self.tree.focus_set()
+            else:
+                self.tree.focus_set()
+
+        return 'break'
+
+    def save_annotated_file(self, event):
+        """Save an annotated version of the current markdown file with comments embedded"""
+        if not self.current_file or not self.current_file.endswith('.md'):
+            return 'break'
+
+        if not self.cells:
+            return 'break'
+
+        # Get the directory and filename
+        file_dir = os.path.dirname(self.current_file)
+        file_name = os.path.basename(self.current_file).rsplit('.', 1)[0]
+
+        # Create annotations directory if it doesn't exist
+        annotations_dir = os.path.join(file_dir, 'annotations')
+        os.makedirs(annotations_dir, exist_ok=True)
+
+        # Create timestamp suffix (format: YYYYMMDD_HHMM)
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+
+        # Create new filename with __annotated and timestamp suffix
+        annotated_filename = f"{file_name}__annotated__{timestamp}.md"
+        annotated_path = os.path.join(annotations_dir, annotated_filename)
+
+        # Build annotated content
+        annotated_lines = []
+
+        for i, cell_content in enumerate(self.cells):
+            # Add the cell content
+            annotated_lines.append(cell_content)
+
+            # Get comments for this cell
+            comments = self.get_comments(self.current_file, cell_content, i)
+
+            if comments:
+                # Add comments as blockquotes
+                annotated_lines.append("\n")
+                annotated_lines.append("---")
+                annotated_lines.append("\n**💬 Comments:**\n")
+                for comment_text, created_at, confidence in comments:
+                    confidence_marker = " ⚠️ (may be outdated)" if confidence == 'fuzzy' else ""
+                    annotated_lines.append(f"\n> **Comment** ({created_at}){confidence_marker}:")
+                    annotated_lines.append(f"> {comment_text}")
+                annotated_lines.append("\n---\n")
+
+        # Write to file
+        try:
+            with open(annotated_path, 'w', encoding='utf-8') as f:
+                f.write('\n'.join(annotated_lines))
+
+            # Update status in path label
+            self.path_label.config(text=f"✓ Saved: {annotated_path}")
+            print(f"Saved annotated file: {annotated_path}")
+
+            # Refresh the directory in the tree that contains this file
+            import os
+            file_dir = os.path.dirname(self.current_file)
+
+            # If we're currently viewing this directory, refresh it
+            if file_dir == self.current_root or self.current_root in file_dir:
+                self.refresh_tree()
+
+            # Also refresh favorites in case this directory is starred
+            self.populate_favorites()
+
+            # Show a temporary notification
+            def reset_label():
+                self.path_label.config(text=self.current_file)
+
+            self.root.after(3000, reset_label)  # Reset after 3 seconds
+
+        except Exception as e:
+            self.path_label.config(text=f"❌ Error: {e}")
+            print(f"Error saving annotated file: {e}")
+
+        return 'break'
+
+    def on_arrow_key(self, event):
+        """Handle arrow key navigation"""
+        # Check if focus is on the tree views - let them handle arrow keys natively
+        focused_widget = self.root.focus_get()
+        if focused_widget in (self.tree, self.favorites_tree):
+            return  # Let the tree handle the arrow key
+
+        # Only handle arrow keys for markdown cell navigation
+        if not self.cells or not self.current_file or not self.current_file.endswith('.md'):
+            return
+
+        if self.viewing_comments:
+            if event.keysym == 'Left':
+                self.viewing_comments = False
+                self.display_current_cell()
+                return 'break'
+        else:
+            if event.keysym == 'Left':
+                if self.reading_mode:
+                    # Stop reading
+                    self.stop_reading()
+                else:
+                    # Start reading
+                    self.start_reading()
+                return 'break'
+            elif event.keysym == 'Down':
+                self.stop_reading()  # Stop if navigating away
+                self.navigate_to_cell(self.current_cell + 1)
+                return 'break'
+            elif event.keysym == 'Up':
+                self.stop_reading()  # Stop if navigating away
+                self.navigate_to_cell(self.current_cell - 1)
+                return 'break'
+            elif event.keysym == 'Right':
+                self.stop_reading()  # Stop if going to comments
+                self.viewing_comments = True
+                self.display_comments()
+                return 'break'
+
+    def navigate_to_cell(self, cell_index):
+        """Navigate to a specific cell"""
+        if not self.cells:
+            return
+
+        cell_index = max(0, min(cell_index, len(self.cells) - 1))
+
+        if cell_index == self.current_cell:
+            return
+
+        # Reset comment narration state when moving between cells
+        self.stop_comment_dictation()
+        self.current_comment_reading_index = -1
+
+        self.current_cell = cell_index
+        self.display_current_cell()
+        self.save_session_state()
+
+    def display_current_cell(self):
+        """Display only the current cell (Instagram shorts style)"""
+        if not self.cells or self.current_cell >= len(self.cells):
+            return
+
+        self.text_widget.delete('1.0', tk.END)
+
+        total_cells = len(self.cells)
+        reading_status = " 🔊 READING..." if self.reading_mode else ""
+        indicator = f"Cell {self.current_cell + 1} / {total_cells}{reading_status}   [← Read/Stop] [→ Comments] [↑↓ Navigate]\n"
+        self.text_widget.insert('1.0', indicator, 'cell_indicator')
+        self.text_widget.insert(tk.END, '─' * 80 + '\n\n', 'separator')
+
+        cell_content = self.cells[self.current_cell]
+        self.render_markdown_cell(cell_content)
+
+        comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+        if comments:
+            fuzzy_count = sum(1 for _, _, conf in comments if conf == 'fuzzy')
+            if fuzzy_count > 0:
+                self.text_widget.insert(tk.END, f'\n\n💬 {len(comments)} comment(s) (⚠️ {fuzzy_count} may be outdated) - Press → to view', 'comment_hint')
+            else:
+                self.text_widget.insert(tk.END, f'\n\n💬 {len(comments)} comment(s) - Press → to view', 'comment_hint')
+        else:
+            self.text_widget.insert(tk.END, '\n\n💬 No comments yet - Press → to add or review', 'comment_hint')
+
+        # Copy cell button
+        self.text_widget.insert(tk.END, '\n\n')
+        copy_frame = tk.Frame(self.text_widget, bg=self.bg_color)
+        self.text_widget.window_create(tk.END, window=copy_frame)
+
+        tk.Button(
+            copy_frame,
+            text="📋 Copy Cell",
+            bg="#4ec9b0",
+            fg="#000000",
+            font=('Consolas', 9, 'bold'),
+            relief=tk.RAISED,
+            padx=10,
+            pady=3,
+            cursor='hand2',
+            command=self.copy_current_cell
+        ).pack()
+
+    def display_comments(self):
+        """Display comments for current cell"""
+        self.text_widget.delete('1.0', tk.END)
+
+        self.text_widget.insert('1.0', f"💬 Comments for Cell {self.current_cell + 1}   [← Back]\n", 'comment_header')
+        self.text_widget.insert(tk.END, '─' * 80 + '\n\n', 'separator')
+
+        cell_content = self.cells[self.current_cell]
+        comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+
+        if comments:
+            for i, (comment_text, created_at, confidence) in enumerate(comments, 1):
+                prefix = "⚠️ " if confidence == 'fuzzy' else ""
+                self.text_widget.insert(tk.END, f"{prefix}Comment {i}:\n", 'comment_number')
+                self.text_widget.insert(tk.END, f"{comment_text}\n", 'comment_text')
+                confidence_text = " (Content may have changed)" if confidence == 'fuzzy' else ""
+                self.text_widget.insert(tk.END, f"Posted: {created_at}{confidence_text}\n\n", 'comment_date')
+        else:
+            self.text_widget.insert(tk.END, "No comments yet.\n\n", 'no_comments')
+
+        self.text_widget.insert(tk.END, "\n" + "─" * 80 + "\n", 'separator')
+
+        # Narrate toggle button
+        narrate_frame = tk.Frame(self.text_widget, bg=self.bg_color)
+        self.text_widget.window_create(tk.END, window=narrate_frame)
+
+        narrate_button_text = "🔊 Narrate: ON" if self.narrate_comments else "🔇 Narrate: OFF"
+        narrate_button_bg = "#4ec9b0" if self.narrate_comments else "#cccccc"
+
+        self.narrate_button = tk.Button(
+            narrate_frame,
+            text=narrate_button_text,
+            bg=narrate_button_bg,
+            fg="#000000",
+            font=('Consolas', 9, 'bold'),
+            relief=tk.RAISED,
+            padx=10,
+            pady=3,
+            cursor='hand2',
+            command=self.toggle_narration
+        )
+        self.narrate_button.pack(side=tk.LEFT, pady=5)
+
+        narrate_status = " (Comments will be read aloud)" if self.narrate_comments else ""
+        status_label = tk.Label(
+            narrate_frame,
+            text=narrate_status,
+            bg=self.bg_color,
+            fg="#888888",
+            font=('Consolas', 8)
+        )
+        status_label.pack(side=tk.LEFT, padx=(5, 0))
+
+        self.text_widget.insert(tk.END, "\n")
+        self.text_widget.insert(tk.END, "Type a comment or '@chat <question>' to ask AI (Cmd+Enter to save):\n", 'instructions')
+
+        self.comment_input = tk.Text(
+            self.text_widget,
+            height=4,
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 10),
+            wrap=tk.WORD
+        )
+        self.text_widget.window_create(tk.END, window=self.comment_input)
+        self.comment_input.bind('<Command-Return>', self.save_comment)
+        self.comment_input.focus_set()
+
+    def call_openai(self, prompt, cell_context, file_content, previous_comments):
+        """Call OpenAI API with the prompt, cell context, file content, and previous comments"""
+        if not self.openai_api_key:
+            return "Error: OpenAI API key not configured. Please add it in Settings."
+
+        try:
+            import json
+            import urllib.request
+            import urllib.error
+            import ssl
+
+            # Create SSL context with certifi bundle (fixes certificate verification issues on macOS)
+            try:
+                import certifi
+                ssl_context = ssl.create_default_context(cafile=certifi.where())
+            except ImportError:
+                # Fallback: disable SSL verification if certifi not available (not ideal but works)
+                ssl_context = ssl._create_unverified_context()
+                print("Warning: SSL verification disabled. Install certifi for secure connections.")
+
+            # Prepare the request
+            url = "https://api.openai.com/v1/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.openai_api_key}"
+            }
+
+            # Build context with previous comments
+            comments_context = ""
+            if previous_comments:
+                comments_context = "\n\n## Previous Comments on This Cell:\n"
+                for i, (comment_text, created_at, confidence) in enumerate(previous_comments, 1):
+                    comments_context += f"\n{i}. {comment_text}\n"
+
+            # Build full context
+            full_context = f"""## Full File Content:
+{file_content}
+
+## Current Cell Being Discussed:
+{cell_context}
+{comments_context}
+
+## User Question:
+{prompt}"""
+
+            # Build the payload
+            payload = {
+                "model": "gpt-4",
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You are a helpful assistant analyzing markdown content. The user is reviewing a markdown file and has questions about a specific section (cell). Provide concise, informative, and contextual responses based on the full file content, the current cell, and any previous comments."
+                    },
+                    {
+                        "role": "user",
+                        "content": full_context
+                    }
+                ],
+                "temperature": 0.7,
+                "max_tokens": 500
+            }
+
+            # Make the request
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers=headers,
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, context=ssl_context, timeout=30) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                return result['choices'][0]['message']['content'].strip()
+
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode('utf-8')
+            print(f"OpenAI API Error: {e.code} - {error_body}")
+            return f"Error: OpenAI API request failed ({e.code}). Check your API key."
+        except Exception as e:
+            print(f"OpenAI Error: {e}")
+            return f"Error: {str(e)}"
+
+    def save_comment(self, event):
+        """Save comment from input"""
+        comment_text = self.comment_input.get('1.0', tk.END).strip()
+        print(f"DEBUG: Saving comment: '{comment_text}'")
+
+        if comment_text:
+            cell_content = self.cells[self.current_cell]
+
+            # Check if comment starts with @chat (AI command)
+            if comment_text.lower().startswith('@chat'):
+                # Remove the @chat and get the question
+                question = comment_text[5:].strip()  # Remove '@chat'
+
+                if not question:
+                    # Show error if no question provided
+                    self.path_label.config(text="Error: Please provide a question after @chat")
+                    def reset_label():
+                        self.path_label.config(text=self.current_file)
+                    self.root.after(2000, reset_label)
+                    return 'break'
+
+                # Show loading message
+                self.path_label.config(text="🤖 Asking AI...")
+                self.root.update()
+
+                # Get previous comments for context
+                previous_comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+
+                # Get full file content
+                try:
+                    with open(self.current_file, 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                except Exception as e:
+                    file_content = f"[Error reading file: {e}]"
+
+                # Call OpenAI with full context
+                ai_response = self.call_openai(question, cell_content, file_content, previous_comments)
+
+                # Save both the question and the response as comments
+                question_comment = f"@chat {question}"
+                self.add_comment(self.current_file, cell_content, self.current_cell, question_comment)
+
+                ai_comment = f"🤖 AI: {ai_response}"
+                self.add_comment(self.current_file, cell_content, self.current_cell, ai_comment)
+
+                print(f"DEBUG: AI question and response saved")
+
+                # Queue for narration if enabled
+                if self.narrate_comments:
+                    # Get total comments to determine comment numbers
+                    all_comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+                    # Queue the question (second to last comment)
+                    if len(all_comments) >= 2:
+                        self.queue_comment_narration(question, len(all_comments) - 1, is_ai=False)
+                    # Queue the AI response (last comment)
+                    self.queue_comment_narration(ai_response, len(all_comments), is_ai=True)
+
+            else:
+                # Regular comment
+                result = self.add_comment(self.current_file, cell_content, self.current_cell, comment_text)
+                print(f"DEBUG: Add comment result: {result}")
+
+                # Queue for narration if enabled
+                if self.narrate_comments and result:
+                    # Get total comments to determine comment number
+                    all_comments = self.get_comments(self.current_file, cell_content, self.current_cell)
+                    self.queue_comment_narration(comment_text, len(all_comments), is_ai=False)
+
+            print(f"DEBUG: File: {self.current_file}, Cell: {self.current_cell}")
+            self.display_comments()
+        else:
+            print("DEBUG: Comment text was empty")
+        return 'break'
+
+    def render_markdown_cell(self, content):
+        """Render markdown content for a single cell"""
+        lines = content.split('\n')
+        in_code_block = False
+
+        for line in lines:
+            if line.startswith('```'):
+                in_code_block = not in_code_block
+                self.text_widget.insert(tk.END, line + '\n', 'code_block')
+                continue
+
+            if in_code_block:
+                self.text_widget.insert(tk.END, line + '\n', 'code_block')
+                continue
+
+            if line.startswith('# '):
+                self.text_widget.insert(tk.END, line + '\n', 'h1')
+            elif line.startswith('## '):
+                self.text_widget.insert(tk.END, line + '\n', 'h2')
+            elif line.startswith('### '):
+                self.text_widget.insert(tk.END, line + '\n', 'h3')
+            elif line.startswith('#### '):
+                self.text_widget.insert(tk.END, line + '\n', 'h4')
+            elif line.startswith('##### '):
+                self.text_widget.insert(tk.END, line + '\n', 'h5')
+            elif line.startswith('###### '):
+                self.text_widget.insert(tk.END, line + '\n', 'h6')
+            elif line.startswith('>'):
+                self.text_widget.insert(tk.END, line + '\n', 'blockquote')
+            elif line.strip().startswith(('-', '*', '+')):
+                self.text_widget.insert(tk.END, line + '\n', 'list_item')
+            elif line.strip() and line.strip()[0].isdigit() and '.' in line[:4]:
+                self.text_widget.insert(tk.END, line + '\n', 'list_item')
+            else:
+                self.text_widget.insert(tk.END, line + '\n')
+
+    def parse_markdown_cells(self, content):
+        """Parse markdown content into cells based on headings"""
+        lines = content.split('\n')
+        current_cell = []
+
+        for line in lines:
+            if line.startswith('#') and current_cell:
+                self.cells.append('\n'.join(current_cell))
+                current_cell = [line]
+            else:
+                current_cell.append(line)
+
+        if current_cell:
+            self.cells.append('\n'.join(current_cell))
+
+        if not self.cells:
+            self.cells = [content]
+
+    def display_file(self, file_path):
+        """Display file content"""
+        # Ensure comment dictation stops when switching files
+        self.stop_comment_dictation()
+        self.current_comment_reading_index = -1
+
+        self.path_label.config(text=file_path)
+        self.current_file = file_path
+        self.text_widget.delete('1.0', tk.END)
+        self.cells = []
+        self.current_cell = 0
+        self.viewing_comments = False
+
+        # Save session state when file is opened
+        self.save_session_state()
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            if file_path.endswith('.md'):
+                self.text_widget.tag_configure('h1', font=('Consolas', 18, 'bold'), foreground='#569cd6', spacing3=10)
+                self.text_widget.tag_configure('h2', font=('Consolas', 16, 'bold'), foreground='#4ec9b0', spacing3=8)
+                self.text_widget.tag_configure('h3', font=('Consolas', 14, 'bold'), foreground='#4ec9b0', spacing3=6)
+                self.text_widget.tag_configure('h4', font=('Consolas', 12, 'bold'), foreground='#4ec9b0', spacing3=4)
+                self.text_widget.tag_configure('h5', font=('Consolas', 11, 'bold'), foreground='#4ec9b0', spacing3=4)
+                self.text_widget.tag_configure('h6', font=('Consolas', 11, 'bold'), foreground='#4ec9b0', spacing3=4)
+                self.text_widget.tag_configure('code_block', background='#2d2d2d', foreground='#ce9178', font=('Monaco', 10))
+                self.text_widget.tag_configure('blockquote', foreground='#6a9955', lmargin1=20, lmargin2=20)
+                self.text_widget.tag_configure('list_item', lmargin1=20, lmargin2=40)
+                self.text_widget.tag_configure('cell_indicator', foreground='#888888', font=('Consolas', 10))
+                self.text_widget.tag_configure('separator', foreground='#444444')
+                self.text_widget.tag_configure('comment_hint', foreground='#ffd700')
+                self.text_widget.tag_configure('comment_header', foreground='#ffd700', font=('Consolas', 12, 'bold'))
+                self.text_widget.tag_configure('comment_number', foreground='#888888', font=('Consolas', 10, 'bold'))
+                self.text_widget.tag_configure('comment_text', foreground='#d4d4d4')
+                self.text_widget.tag_configure('comment_date', foreground='#666666', font=('Consolas', 9))
+                self.text_widget.tag_configure('no_comments', foreground='#888888', font=('Consolas', 10, 'italic'))
+                self.text_widget.tag_configure('instructions', foreground='#888888')
+
+                self.parse_markdown_cells(content)
+
+                if self.cells:
+                    self.display_current_cell()
+            else:
+                self.text_widget.insert('1.0', content)
+
+        except Exception as e:
+            self.text_widget.insert('1.0', f"Error reading file:\n{str(e)}")
+
+
+def main():
+    root = tk.Tk()
+    app = FileViewer(root)
+
+    def on_closing():
+        app.save_session_state()
+        app.save_navigation_state()
+        app.conn.close()
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
