@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lenk Viewer</title>
+    <link rel="stylesheet" href="./assets/styles.css">
+</head>
+<body>
+    <div id="app">
+        <header class="top-bar">
+            <h1>Lenk File Viewer</h1>
+            <div class="status" id="status">Loading…</div>
+        </header>
+        <main class="layout">
+            <aside class="sidebar">
+                <section class="favorites">
+                    <h2>Favorites</h2>
+                    <ul id="favorites-list" class="tree"></ul>
+                </section>
+                <section class="browser">
+                    <div class="path-bar">
+                        <label for="path-input">Path</label>
+                        <input id="path-input" type="text" placeholder="/Users/you" />
+                        <button id="path-go">Go</button>
+                    </div>
+                    <ul id="browser-tree" class="tree"></ul>
+                </section>
+                <section class="settings">
+                    <button id="open-settings">⚙︎ Settings</button>
+                </section>
+            </aside>
+            <section class="reader">
+                <header class="reader-header">
+                    <div class="path-meta">
+                        <div id="file-path">Select a file to view</div>
+                        <button id="toggle-star" class="star" title="Toggle Favorite">☆</button>
+                    </div>
+                    <div class="reader-actions">
+                        <button id="refresh">Refresh</button>
+                        <button id="export">Export Annotated</button>
+                    </div>
+                </header>
+                <article id="markdown-view" class="markdown">
+                    <p>Select a markdown file from the browser.</p>
+                </article>
+                <section class="comments-panel">
+                    <header>
+                        <h3>Comments</h3>
+                        <div id="comment-status" class="muted"></div>
+                    </header>
+                    <ul id="comments-list"></ul>
+                    <form id="comment-form">
+                        <label for="comment-text">Add Comment</label>
+                        <textarea id="comment-text" rows="3" placeholder="Type comment…"></textarea>
+                        <div class="comment-form-actions">
+                            <button type="submit">Save Comment</button>
+                            <button type="button" id="copy-cell">Copy Cell</button>
+                        </div>
+                    </form>
+                </section>
+                <footer class="reader-footer">
+                    <div class="cell-meta" id="cell-meta"></div>
+                    <div class="comment-actions">
+                        <button id="prev-comment">⟲ Prev Comment</button>
+                        <button id="next-comment">Next Comment ⟳</button>
+                        <button id="stop-comment">⏹ Stop</button>
+                    </div>
+                </footer>
+            </section>
+        </main>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="./assets/main.js"></script>
+</body>
+</html>

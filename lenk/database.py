@@ -14,7 +14,7 @@ class DatabaseMixin:
     def init_database(self) -> None:
         """Initialize SQLite database for starred items, comments, and settings."""
         db_path = os.path.expanduser("~/.file_viewer_stars.db")
-        self.conn = sqlite3.connect(db_path)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.cursor = self.conn.cursor()
         self.cursor.execute('''
             CREATE TABLE IF NOT EXISTS starred (
