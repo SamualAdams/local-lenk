@@ -1254,7 +1254,6 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             print(f"Saved annotated file: {save_path}")
 
             # Refresh the directory in the tree that contains this file
-            import os
             file_dir = os.path.dirname(self.current_file)
 
             # If we're currently viewing this directory, refresh it
