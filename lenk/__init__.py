@@ -1,5 +1,8 @@
-"""Lenk file viewer package."""
+"""Lenk project package (Django-like layout).
 
-from .app import FileViewer, main
+Exports the viewer app's main entry points for convenience.
+"""
+
+from .apps.viewer.app import FileViewer, main
 
 __all__ = ["FileViewer", "main"]

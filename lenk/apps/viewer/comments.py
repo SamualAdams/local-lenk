@@ -217,3 +217,4 @@ class CommentAudioMixin:
 
             self.root.after(100, reset_label)
             self.root.after(200, self.process_narration_queue)
+

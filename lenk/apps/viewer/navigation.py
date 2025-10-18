@@ -116,3 +116,4 @@ class NavigationStateMixin:
     def _navigation_state_save_job(self) -> None:
         self.tree_state_save_job = None
         self.save_navigation_state()
+

@@ -182,3 +182,4 @@ class DatabaseMixin:
         except Exception as exc:  # pylint: disable=broad-except
             print(f"DEBUG: Error inserting comment: {exc}")
             return False
+
