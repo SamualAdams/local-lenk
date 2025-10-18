@@ -2,7 +2,7 @@
 """Tkinter application wiring for the Lenk file viewer."""
 import os
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 
 from .comments import CommentAudioMixin
 from .database import DatabaseMixin
@@ -310,8 +310,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Bind Command+/ to toggle focus
         self.root.bind('<Command-slash>', self.toggle_focus)
 
-        # Bind Command+E to export annotated version
-        self.root.bind('<Command-e>', self.save_annotated_file)
+        # Bind Command+E to export annotated version (bind_all to ensure it fires)
+        self.root.bind_all('<Command-e>', self.save_annotated_file)
 
         # Bind Command+R to refresh tree
         self.root.bind('<Command-r>', self.refresh_tree_manual)
@@ -1146,7 +1146,11 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         return 'break'
 
     def save_annotated_file(self, event):
-        """Save an annotated version of the current markdown file with comments embedded"""
+        """Save an annotated version of the current markdown file with comments embedded.
+
+        Prompts for a destination file (defaults to the current file's directory)
+        and filename with an '__annotated__YYYYMMDD_HHMM.md' suffix.
+        """
         if not self.current_file or not self.current_file.endswith('.md'):
             return 'break'
 
@@ -1157,17 +1161,29 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         file_dir = os.path.dirname(self.current_file)
         file_name = os.path.basename(self.current_file).rsplit('.', 1)[0]
 
-        # Create annotations directory if it doesn't exist
-        annotations_dir = os.path.join(file_dir, 'annotations')
-        os.makedirs(annotations_dir, exist_ok=True)
-
         # Create timestamp suffix (format: YYYYMMDD_HHMM)
         from datetime import datetime
         timestamp = datetime.now().strftime("%Y%m%d_%H%M")
 
         # Create new filename with __annotated and timestamp suffix
         annotated_filename = f"{file_name}__annotated__{timestamp}.md"
-        annotated_path = os.path.join(annotations_dir, annotated_filename)
+
+        # Ask user where to save (defaults to same directory)
+        try:
+            save_path = filedialog.asksaveasfilename(
+                parent=self.root,
+                title="Save Annotated Markdown",
+                initialdir=file_dir,
+                initialfile=annotated_filename,
+                defaultextension=".md",
+                filetypes=[("Markdown", "*.md"), ("All Files", "*.*")]
+            )
+        except Exception:
+            save_path = ''
+
+        if not save_path:
+            # User cancelled
+            return 'break'
 
         # Build annotated content
         annotated_lines = []
@@ -1192,12 +1208,12 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         # Write to file
         try:
-            with open(annotated_path, 'w', encoding='utf-8') as f:
+            with open(save_path, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(annotated_lines))
 
             # Update status in path label
-            self.path_label.config(text=f"✓ Saved: {annotated_path}")
-            print(f"Saved annotated file: {annotated_path}")
+            self.path_label.config(text=f"✓ Saved: {save_path}")
+            print(f"Saved annotated file: {save_path}")
 
             # Refresh the directory in the tree that contains this file
             import os
