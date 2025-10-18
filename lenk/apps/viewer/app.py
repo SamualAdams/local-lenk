@@ -241,6 +241,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Right pane - File content viewer
         right_frame = tk.Frame(main_container, bg=self.bg_color)
         main_container.add(right_frame)
+        self.right_frame = right_frame
 
         # File path label
         self.path_label = tk.Label(
@@ -255,9 +256,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         )
         self.path_label.pack(fill=tk.X)
 
-        # Text widget with scrollbar for file content
+        # Text widget with scrollbar for file content (default viewer)
         text_frame = tk.Frame(right_frame, bg=self.bg_color)
         text_frame.pack(fill=tk.BOTH, expand=True)
+        self.text_frame = text_frame
 
         text_scroll = tk.Scrollbar(text_frame, bg=self.bg_color)
         text_scroll.pack(side=tk.RIGHT, fill=tk.Y)
@@ -276,6 +278,46 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         )
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         text_scroll.config(command=self.text_widget.yview)
+
+        # Python outline + code viewer (lazy toggled)
+        self.py_frame = tk.PanedWindow(right_frame, orient=tk.HORIZONTAL, bg=self.bg_color, sashwidth=5, sashrelief=tk.FLAT)
+        # Left: outline tree
+        outline_container = tk.Frame(self.py_frame, bg=self.bg_color)
+        outline_scroll = tk.Scrollbar(outline_container, bg=self.bg_color)
+        outline_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.py_outline = ttk.Treeview(outline_container, yscrollcommand=outline_scroll.set, selectmode='browse')
+        self.py_outline.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        outline_scroll.config(command=self.py_outline.yview)
+        self.py_frame.add(outline_container, width=280)
+
+        # Right: code/details
+        code_container = tk.Frame(self.py_frame, bg=self.bg_color)
+        code_scroll = tk.Scrollbar(code_container, bg=self.bg_color)
+        code_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.py_text = tk.Text(
+            code_container,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            selectbackground=self.select_color,
+            font=('Consolas', 11),
+            wrap=tk.NONE,
+            padx=10,
+            pady=10,
+            yscrollcommand=code_scroll.set
+        )
+        self.py_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        code_scroll.config(command=self.py_text.yview)
+        self.py_frame.add(code_container)
+
+        # Hide Python view by default; shown for .py files
+        self.py_frame.pack_forget()
+
+        # Outline selection handler
+        self.py_outline.bind('<<TreeviewSelect>>', self.on_python_symbol_select)
+
+        # Cache for docstrings and nodes
+        self._py_outline_cache = {}
 
         # Bind tree selection events
         self.tree.bind('<<TreeviewSelect>>', self.on_file_select)
@@ -1680,6 +1722,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 content = f.read()
 
             if file_path.endswith('.md'):
+                # Ensure text view visible, Python view hidden
+                self.show_text_view()
                 self.text_widget.tag_configure('h1', font=('Consolas', 18, 'bold'), foreground='#569cd6', spacing3=10)
                 self.text_widget.tag_configure('h2', font=('Consolas', 16, 'bold'), foreground='#4ec9b0', spacing3=8)
                 self.text_widget.tag_configure('h3', font=('Consolas', 14, 'bold'), foreground='#4ec9b0', spacing3=6)
@@ -1703,11 +1747,177 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
                 if self.cells:
                     self.display_current_cell()
+            elif file_path.endswith('.py'):
+                # Switch to Python outline mode
+                self.show_python_view(file_path, content)
             else:
+                self.show_text_view()
                 self.text_widget.insert('1.0', content)
 
         except Exception as e:
             self.text_widget.insert('1.0', f"Error reading file:\n{str(e)}")
+
+    def show_text_view(self):
+        """Ensure the plain text/markdown view is visible and Python view hidden."""
+        try:
+            self.py_frame.pack_forget()
+        except Exception:
+            pass
+        # Show text frame
+        if not self.text_frame.winfo_ismapped():
+            self.text_frame.pack(fill=tk.BOTH, expand=True)
+
+    def show_python_view(self, file_path, content):
+        """Show the Python outline + code viewer for the given file content."""
+        # Hide text view
+        try:
+            self.text_frame.pack_forget()
+        except Exception:
+            pass
+
+        # Show python frame if not shown
+        if not self.py_frame.winfo_ismapped():
+            self.py_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Build or refresh outline
+        self.build_python_outline(file_path, content)
+
+    def build_python_outline(self, file_path, content):
+        """Parse Python AST and populate the outline tree."""
+        import ast
+        self.py_outline.delete(*self.py_outline.get_children())
+        self.py_text.delete('1.0', tk.END)
+
+        try:
+            tree = ast.parse(content)
+        except Exception as e:
+            self.py_text.insert('1.0', f"Error parsing Python file: {e}")
+            return
+
+        lines = content.splitlines()
+
+        # Helper to get end lineno if available
+        def get_end_lineno(node):
+            return getattr(node, 'end_lineno', getattr(node, 'lineno', 1))
+
+        # Root node
+        root_id = self.py_outline.insert('', 'end', text=os.path.basename(file_path), values=("module", 1, len(lines)))
+
+        # Cache docstrings by iid
+        self._py_outline_cache.clear()
+
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                doc = ast.get_docstring(node) or ""
+                iid = self.py_outline.insert(root_id, 'end', text=f"class {node.name}", values=("class", node.lineno, get_end_lineno(node)))
+                self._py_outline_cache[iid] = {"doc": doc, "type": "class"}
+                for sub in node.body:
+                    if isinstance(sub, ast.FunctionDef) or isinstance(sub, ast.AsyncFunctionDef):
+                        sdoc = ast.get_docstring(sub) or ""
+                        smark = "async def" if isinstance(sub, ast.AsyncFunctionDef) else "def"
+                        sid = self.py_outline.insert(iid, 'end', text=f"{smark} {sub.name}()", values=("method", sub.lineno, get_end_lineno(sub)))
+                        self._py_outline_cache[sid] = {"doc": sdoc, "type": "method"}
+            elif isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
+                doc = ast.get_docstring(node) or ""
+                mark = "async def" if isinstance(node, ast.AsyncFunctionDef) else "def"
+                iid = self.py_outline.insert(root_id, 'end', text=f"{mark} {node.name}()", values=("function", node.lineno, get_end_lineno(node)))
+                self._py_outline_cache[iid] = {"doc": doc, "type": "function"}
+            elif isinstance(node, ast.Assign):
+                # show top-level assignment names
+                names = []
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        names.append(t.id)
+                if names:
+                    text = ", ".join(names)
+                    self.py_outline.insert(root_id, 'end', text=f"const {text}", values=("const", node.lineno, get_end_lineno(node)))
+
+        self.py_outline.item(root_id, open=True)
+        # Select root by default
+        self.py_outline.selection_set(root_id)
+        self.on_python_symbol_select(None)
+
+    def on_python_symbol_select(self, event):
+        """When a symbol is selected in outline, show docstring and code snippet."""
+        sel = self.py_outline.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        vals = self.py_outline.item(iid).get('values')
+        if not vals or len(vals) < 3:
+            return
+        node_type, start, end = vals[0], int(vals[1]), int(vals[2])
+
+        # Load the file content
+        try:
+            with open(self.current_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            self.py_text.delete('1.0', tk.END)
+            self.py_text.insert('1.0', f"Error reading file: {e}")
+            return
+
+        lines = content.splitlines()
+        snippet = "\n".join(lines[start-1:end])
+        meta = self._py_outline_cache.get(iid, {})
+        doc = (meta.get('doc') or '').strip()
+
+        # Render into right text
+        self.py_text.delete('1.0', tk.END)
+        header = self.py_outline.item(iid).get('text')
+        self.py_text.insert(tk.END, f"{header}\n", ('h2',))
+        if doc:
+            first_line = doc.splitlines()[0]
+            self.py_text.insert(tk.END, f"{first_line}\n\n", ('doc',))
+
+        self.py_text.insert(tk.END, snippet, ('code',))
+
+        # Basic styles
+        self.py_text.tag_configure('h2', font=('Consolas', 14, 'bold'), foreground='#4ec9b0', spacing3=6)
+        self.py_text.tag_configure('doc', foreground='#aaaaaa', font=('Consolas', 10, 'italic'))
+        self.py_text.tag_configure('code', font=('Monaco', 10))
+
+        # Optional: simple syntax highlight
+        self.syntax_highlight_python()
+
+    def syntax_highlight_python(self):
+        """Very simple Python syntax highlighting for the current py_text buffer."""
+        import re
+        text = self.py_text
+        code_start = '1.0'
+        # configure tags
+        text.tag_configure('kw', foreground='#569cd6')
+        text.tag_configure('str', foreground='#ce9178')
+        text.tag_configure('com', foreground='#6a9955')
+        # keywords
+        keywords = r"\b(False|class|finally|is|return|None|continue|for|lambda|try|True|def|from|nonlocal|while|and|del|global|not|with|as|elif|if|or|yield|assert|else|import|pass|break|except|in|raise)\b"
+        content = text.get('1.0', tk.END)
+        # clear previous tags
+        for tag in ('kw','str','com'):
+            text.tag_remove(tag, '1.0', tk.END)
+        # strings
+        for m in re.finditer(r"(?s)('''.*?'''|\"\"\".*?\"\"\"|'[^'\n]*'|\"[^\"\n]*\")", content):
+            start = f"1.0+{m.start()}c"
+            end = f"1.0+{m.end()}c"
+            text.tag_add('str', start, end)
+        # comments
+        for m in re.finditer(r"#[^\n]*", content):
+            start = f"1.0+{m.start()}c"
+            end = f"1.0+{m.end()}c"
+            text.tag_add('com', start, end)
+        # keywords (after strings/comments to avoid coloring inside)
+        for m in re.finditer(keywords, content):
+            start = f"1.0+{m.start()}c"
+            end = f"1.0+{m.end()}c"
+            # Skip if inside a string/comment tag
+            ranges = text.tag_ranges('str') + text.tag_ranges('com')
+            inside = False
+            for i in range(0, len(ranges), 2):
+                if text.compare(start, '>=', ranges[i]) and text.compare(end, '<=', ranges[i+1]):
+                    inside = True
+                    break
+            if not inside:
+                text.tag_add('kw', start, end)
 
 
 def main():
