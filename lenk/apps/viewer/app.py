@@ -1648,40 +1648,87 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         return 'break'
 
     def render_markdown_cell(self, content):
-        """Render markdown content for a single cell"""
+        """Render markdown content for a single cell with basic formatting."""
+        import re
         lines = content.split('\n')
         in_code_block = False
+        fence_lang = ''
+
+        def insert_inline(text):
+            # simple inline parser for `code`, **bold**, *italic*, [text](url)
+            code_pat = re.compile(r"`([^`]+)`")
+            bold_pat = re.compile(r"\*\*([^*]+)\*\*")
+            italic_pat = re.compile(r"(?<!\*)\*([^*]+)\*(?!\*)")
+            link_pat = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+
+            pos = 0
+            while pos < len(text):
+                # find earliest of code/bold/italic/link
+                candidates = []
+                for pat, tag in ((code_pat, 'inline_code'), (bold_pat, 'bold'), (italic_pat, 'italic'), (link_pat, 'link')):
+                    m = pat.search(text, pos)
+                    if m:
+                        candidates.append((m.start(), m, tag))
+                if not candidates:
+                    self.text_widget.insert(tk.END, text[pos:])
+                    break
+                candidates.sort(key=lambda x: x[0])
+                start, m, tag = candidates[0]
+                if start > pos:
+                    self.text_widget.insert(tk.END, text[pos:start])
+                if tag == 'link':
+                    self.text_widget.insert(tk.END, m.group(1), 'link')
+                else:
+                    self.text_widget.insert(tk.END, m.group(1), tag)
+                pos = m.end()
 
         for line in lines:
+            # fenced code
             if line.startswith('```'):
-                in_code_block = not in_code_block
-                self.text_widget.insert(tk.END, line + '\n', 'code_block')
+                if not in_code_block:
+                    fence_lang = line.strip('`').strip()
+                    if fence_lang:
+                        self.text_widget.insert(tk.END, fence_lang + '\n', 'code_block')
+                    in_code_block = True
+                else:
+                    in_code_block = False
                 continue
 
             if in_code_block:
                 self.text_widget.insert(tk.END, line + '\n', 'code_block')
                 continue
 
-            if line.startswith('# '):
-                self.text_widget.insert(tk.END, line + '\n', 'h1')
-            elif line.startswith('## '):
-                self.text_widget.insert(tk.END, line + '\n', 'h2')
-            elif line.startswith('### '):
-                self.text_widget.insert(tk.END, line + '\n', 'h3')
-            elif line.startswith('#### '):
-                self.text_widget.insert(tk.END, line + '\n', 'h4')
-            elif line.startswith('##### '):
-                self.text_widget.insert(tk.END, line + '\n', 'h5')
-            elif line.startswith('###### '):
-                self.text_widget.insert(tk.END, line + '\n', 'h6')
-            elif line.startswith('>'):
-                self.text_widget.insert(tk.END, line + '\n', 'blockquote')
-            elif line.strip().startswith(('-', '*', '+')):
-                self.text_widget.insert(tk.END, line + '\n', 'list_item')
-            elif line.strip() and line.strip()[0].isdigit() and '.' in line[:4]:
-                self.text_widget.insert(tk.END, line + '\n', 'list_item')
-            else:
-                self.text_widget.insert(tk.END, line + '\n')
+            # headings
+            if line.startswith('#'):
+                level = len(line) - len(line.lstrip('#'))
+                text = line[level:].strip()
+                tag = f'h{min(level,6)}'
+                self.text_widget.insert(tk.END, text + '\n', tag)
+                continue
+
+            # blockquote
+            if line.startswith('>'):
+                self.text_widget.insert(tk.END, line.lstrip('> ').rstrip() + '\n', 'blockquote')
+                continue
+
+            stripped = line.lstrip()
+            # unordered list
+            if stripped.startswith(('-', '*', '+')):
+                bullet_text = '• ' + stripped[1:].lstrip()
+                self.text_widget.insert(tk.END, bullet_text + '\n', 'list_item')
+                continue
+            # ordered list
+            if re.match(r"^\s*\d+\.", line):
+                self.text_widget.insert(tk.END, line.strip() + '\n', 'list_item')
+                continue
+
+            # paragraph spacing on blank lines
+            if not line.strip():
+                self.text_widget.insert(tk.END, '\n', 'paragraph')
+                continue
+
+            # normal text with inline markup
+            insert_inline(line + '\n')
 
     def parse_markdown_cells(self, content):
         """Parse markdown content into cells based on headings"""
@@ -1730,9 +1777,14 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 self.text_widget.tag_configure('h4', font=('Consolas', 12, 'bold'), foreground='#4ec9b0', spacing3=4)
                 self.text_widget.tag_configure('h5', font=('Consolas', 11, 'bold'), foreground='#4ec9b0', spacing3=4)
                 self.text_widget.tag_configure('h6', font=('Consolas', 11, 'bold'), foreground='#4ec9b0', spacing3=4)
-                self.text_widget.tag_configure('code_block', background='#2d2d2d', foreground='#ce9178', font=('Monaco', 10))
+                self.text_widget.tag_configure('code_block', background='#2d2d2d', foreground='#ce9178', font=('Monaco', 10), lmargin1=16, lmargin2=16, spacing1=2, spacing3=6)
                 self.text_widget.tag_configure('blockquote', foreground='#6a9955', lmargin1=20, lmargin2=20)
-                self.text_widget.tag_configure('list_item', lmargin1=20, lmargin2=40)
+                self.text_widget.tag_configure('list_item', lmargin1=24, lmargin2=48, spacing1=1, spacing3=1)
+                self.text_widget.tag_configure('paragraph', spacing1=2, spacing3=6)
+                self.text_widget.tag_configure('inline_code', background='#2d2d2d', foreground='#ce9178', font=('Monaco', 10))
+                self.text_widget.tag_configure('bold', font=('Consolas', 11, 'bold'))
+                self.text_widget.tag_configure('italic', font=('Consolas', 11, 'italic'))
+                self.text_widget.tag_configure('link', foreground='#4aa3ff', underline=True)
                 self.text_widget.tag_configure('cell_indicator', foreground='#888888', font=('Consolas', 10))
                 self.text_widget.tag_configure('separator', foreground='#444444')
                 self.text_widget.tag_configure('comment_hint', foreground='#ffd700')
