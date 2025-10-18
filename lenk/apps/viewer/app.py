@@ -588,6 +588,34 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 command=test_voice
             ).pack(side=tk.LEFT)
 
+            # Export behavior
+            tk.Label(
+                self.settings_panel,
+                text="Export Behavior:",
+                bg=self.border_color,
+                fg=self.fg_color,
+                font=('Consolas', 10, 'bold')
+            ).pack(pady=(10, 3), anchor='w')
+
+            export_frame = tk.Frame(self.settings_panel, bg=self.border_color)
+            export_frame.pack(fill=tk.X, pady=3)
+
+            self.export_prompt_var = tk.BooleanVar(value=getattr(self, 'export_prompt', True))
+            tk.Checkbutton(
+                export_frame,
+                text="Always prompt for save location on Cmd+E",
+                variable=self.export_prompt_var,
+                onvalue=True,
+                offvalue=False,
+                bg=self.border_color,
+                fg=self.fg_color,
+                selectcolor=self.border_color,
+                activebackground=self.border_color,
+                activeforeground=self.fg_color,
+                highlightthickness=0,
+                font=('Consolas', 9)
+            ).pack(anchor='w')
+
             # OpenAI API Key setting
             tk.Label(
                 self.settings_panel,
@@ -624,6 +652,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 new_home = self.home_entry.get()
                 new_speed = self.speed_var.get()
                 new_api_key = self.api_key_entry.get()
+                new_export_prompt = bool(self.export_prompt_var.get())
 
                 if os.path.isdir(new_home):
                     self.home_directory = new_home
@@ -638,6 +667,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
                 self.openai_api_key = new_api_key
                 self.save_setting('openai_api_key', new_api_key)
+
+                # Save export behavior
+                self.export_prompt = new_export_prompt
+                self.save_setting('export_prompt', '1' if new_export_prompt else '0')
 
                 self.toggle_settings()
 
@@ -1168,22 +1201,27 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Create new filename with __annotated and timestamp suffix
         annotated_filename = f"{file_name}__annotated__{timestamp}.md"
 
-        # Ask user where to save (defaults to same directory)
-        try:
-            save_path = filedialog.asksaveasfilename(
-                parent=self.root,
-                title="Save Annotated Markdown",
-                initialdir=file_dir,
-                initialfile=annotated_filename,
-                defaultextension=".md",
-                filetypes=[("Markdown", "*.md"), ("All Files", "*.*")]
-            )
-        except Exception:
-            save_path = ''
-
-        if not save_path:
-            # User cancelled
-            return 'break'
+        # Decide save path
+        save_path = ''
+        if getattr(self, 'export_prompt', True):
+            # Ask user where to save (defaults to same directory)
+            try:
+                save_path = filedialog.asksaveasfilename(
+                    parent=self.root,
+                    title="Save Annotated Markdown",
+                    initialdir=file_dir,
+                    initialfile=annotated_filename,
+                    defaultextension=".md",
+                    filetypes=[("Markdown", "*.md"), ("All Files", "*.*")]
+                )
+            except Exception:
+                save_path = ''
+            if not save_path:
+                # User cancelled
+                return 'break'
+        else:
+            # Auto-save next to current file
+            save_path = os.path.join(file_dir, annotated_filename)
 
         # Build annotated content
         annotated_lines = []

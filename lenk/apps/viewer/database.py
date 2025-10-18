@@ -60,6 +60,9 @@ class DatabaseMixin:
         self.home_directory = settings.get('home_directory', os.path.expanduser("~"))
         self.voice_speed = int(settings.get('voice_speed', '200'))
         self.openai_api_key = settings.get('openai_api_key', '')
+        # Export behavior: whether to prompt for save location on Cmd+E
+        export_prompt_raw = settings.get('export_prompt', '1')
+        self.export_prompt = str(export_prompt_raw).lower() not in ('0', 'false', 'no')
 
         self.current_root = self.home_directory
 
@@ -182,4 +185,3 @@ class DatabaseMixin:
         except Exception as exc:  # pylint: disable=broad-except
             print(f"DEBUG: Error inserting comment: {exc}")
             return False
-
