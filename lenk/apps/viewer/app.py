@@ -1206,8 +1206,13 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         if getattr(self, 'export_prompt', True):
             # Ask user where to save (defaults to same directory)
             try:
+                # Ensure window is realized to avoid macOS sheet errors
+                try:
+                    self.root.update_idletasks()
+                except Exception:
+                    pass
+
                 save_path = filedialog.asksaveasfilename(
-                    parent=self.root,
                     title="Save Annotated Markdown",
                     initialdir=file_dir,
                     initialfile=annotated_filename,
