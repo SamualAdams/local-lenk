@@ -1,65 +1,77 @@
-# Viewer Improvements — Requirements and Ideas
+# Viewer Improvements — Narrative and Plan
 
-Problem summary
-- The right-side viewer is hard to read and scan.
-- Markdown is not formatted well enough for fast comprehension.
-- Python files render as raw code; hard to navigate.
+## Context
+Today’s viewer makes reading and scanning documents harder than it should be. Markdown lacks typographic structure and visual rhythm, and Python files are rendered as plain code without an index of what matters. The result: it’s slower to find headings in Markdown and slower to navigate classes and functions in Python.
 
-Goals
-- Markdown: render with readable, structured formatting and typographic polish.
-- Python: present a simplified, navigable outline of classes, functions, and key symbols with docstrings; allow expanding into code or docstring details; support up/down navigation.
+## Vision
+Make the right‑side viewer feel like a purpose‑built reader for docs and code. For Markdown, it should read like a clean document with clear hierarchy and pleasant spacing. For Python, it should behave like a mini “symbol explorer” that lets you skim structure, see docstrings, and jump around quickly — all with the keyboard.
 
-Minimum scope
-- Markdown (.md)
-  - Headings: clear hierarchy, spacing, and font weight.
-  - Lists, code blocks, blockquotes: styled distinctly; monospaced code.
-  - Inline formatting: bold/italic/inline code rendered clearly.
-  - Link highlighting and basic table alignment.
-  - Dark‑mode friendly colors, proper line height and margins.
-- Python (.py)
-  - Parse an outline of: modules → classes → methods; top‑level functions; constants.
-  - Show first line of docstring (summary) inline; expand to full docstring on demand.
-  - Keyboard navigation: Up/Down to move, Left/Right to expand/collapse, Enter to open selection in code view.
-  - Optional split view: outline on the left, selected symbol’s code on the right with syntax highlighting.
+## Experience Goals
+- Fast scanning: key structure is visually obvious at a glance.
+- Keyboard‑first: Up/Down to move, Left/Right to expand or switch context, Enter to open.
+- Readable typography: good contrast, spacing, and code rendering in dark mode.
+- Zero surprises: large files still load responsively; no UI stalls.
 
-Nice‑to‑have
-- Markdown: table of contents pane synced with scroll; footnote rendering; image previews.
-- Python: search box filtering symbols; jump to definition within file; copy symbol signature.
-- Shared: quick “Copy cell/section” action; adjustable font size; toggle soft wrap.
+## Reader Modes
 
-Implementation approach (high level)
-- UI structure
-  - Add a viewer mode selector based on file type.
-  - For Python, add an Outline panel widget inside the right pane (Treeview) with expand/collapse.
-  - For Markdown, continue using Text widget but add tagging for headings, lists, code, quotes, and links; consider a Canvas/HTML hybrid if needed.
-- Markdown renderer
-  - Create a lightweight Markdown parser/renderer that produces styled segments into the Text widget (no external deps if possible). Recognize: headings (#..######), lists (-, *, 1.), fenced code (```), blockquotes (>), inline `code`, **bold**, _italic_.
-  - Apply Text tags with fonts/colors/margins; adjust line spacing for headings and between paragraphs.
-- Python outline
-  - Use Python’s built‑in `ast` to parse and collect classes, functions, methods, and docstrings.
-  - Build a hierarchical model and bind it to a ttk.Treeview.
-  - Render docstring summaries; on select, populate the right subpanel with formatted docstring and syntax‑highlighted code snippet.
-- Keyboard mappings
-  - Up/Down: move selection among outline items or markdown sections.
-  - Left/Right: collapse/expand (Python outline), or switch between content/comments.
-  - +/- or Cmd+=/Cmd+-: adjust font size.
+### Markdown (.md)
+Render Markdown with clear typographic hierarchy and lightweight styling — no heavy HTML engine required.
+- Headings: distinct sizes/weights with generous spacing; automatic anchor markers optional.
+- Lists and quotes: indentation, bullets, and quote bars that are visually distinct.
+- Code blocks: monospaced, shaded background, preserved indentation, optional language label.
+- Inline emphasis: bold/italic/inline code styled clearly, with good contrast.
+- Tables and links: simple alignment and hover style where possible.
+- Dark‑mode friendly: consistent colors, line height, and margins to reduce eye strain.
 
-Risks / considerations
-- Tkinter Text is limited for complex layout; excessive tags can slow large files.
-- Syntax highlighting in pure Tk may be basic; consider a simple regex‑based highlighter for Python.
-- Ensure performance on large .py files (lazy load of code panel, outline first).
+### Python (.py)
+Show an outline of symbols so the file is explorable like a table of contents.
+- Structure: modules → classes → methods; plus top‑level functions and constants.
+- Docstrings: show the first line as a summary; expand for the full docstring.
+- Navigation: Up/Down moves between items; Left/Right collapses/expands; Enter opens selected code.
+- Split view (optional): outline on the left, selected symbol’s code on the right with syntax highlighting.
 
-Milestones
-- M1: Markdown styling pass (headings, lists, code, quotes, links) and font size control.
-- M2: Python AST outline with navigation and docstring previews; selection opens code.
-- M3: TOC for Markdown + search/filter for Python outline; basic syntax highlighting.
+## Interaction Model
+- Up/Down: move between sections (Markdown) or symbols (Python).
+- Left/Right: switch content vs comments (Markdown) or collapse/expand in outline (Python).
+- Cmd+= / Cmd+‑: adjust font size.
+- Cmd+C: quickly copy the current section/symbol block (content + metadata) when available.
 
-Acceptance criteria
-- A sample README.md renders with clear hierarchy, spacing, distinct code blocks.
-- A sample Python file shows an outline of classes/methods/functions with docstrings; Up/Down navigates items, Left/Right expands/collapses; Enter opens code.
-- No UI freezes when loading medium (~2k lines) Python files.
+## Technical Approach
 
-Notes / Ideas
-- Consider caching AST outlines per file path and invalidating on file modification time.
-- Allow toggling between “Reader” and “Code” view for Python (doc‑first vs code‑first).
-- Add a status bar hint when outline/navigation shortcuts are active.
+### Markdown rendering
+Use the existing Text widget and add a lightweight renderer that translates Markdown into styled segments and tags (no heavy external engine).
+- Recognize headings (#..######), lists (-, *, 1.), fenced code (```), blockquotes (>), basic tables, and inline styles.
+- Apply tags for fonts, spacing, and colors; tune line spacing before/after headings and paragraphs.
+- Preserve fenced code blocks verbatim, with monospaced font and shaded background.
+
+### Python outline
+Use Python’s `ast` module to parse classes, methods, functions, and constants.
+- Build a hierarchical model and bind it to a `ttk.Treeview` inside the right pane.
+- Compute docstring summaries (first line) and show them inline; expand on demand.
+- Selecting a symbol populates a detail panel with the docstring and a syntax‑highlighted code snippet.
+- Cache parsed outlines per file with invalidation on modification time to keep it snappy.
+
+## Performance & Risks
+- Tkinter Text can lag with too many tags on very large files; keep styles minimal and batch inserts.
+- Syntax highlighting will be basic at first; use regex‑based rules for Python keywords/strings/comments.
+- Outline first, code later: for large Python files, render the outline immediately and lazy‑load code details.
+
+## Milestones
+1) Markdown readability pass: headings, lists, code, quotes, links; font‑size control.
+2) Python AST outline: navigation and docstring previews; Enter opens code.
+3) Enhancements: Markdown TOC, Python outline search/filter, basic syntax highlighting.
+
+## Acceptance Criteria
+- A sample README.md renders with obvious hierarchy, spacing, and distinct code blocks.
+- A sample Python file displays an outline of classes/methods/functions; Up/Down navigates, Left/Right expands/collapses; Enter opens code, with docstrings visible.
+- Opening a ~2k‑line Python file keeps UI responsive; outline renders quickly.
+
+## Open Questions
+- Should Markdown support embedded images and footnotes in the first pass?
+- Do we want a persistent TOC pane for Markdown, or an on‑demand popup?
+- For Python, should we include call signatures in the outline or only on selection?
+
+## Future Ideas
+- Toggle between “Reader” (docstring‑first) and “Code” (code‑first) modes for Python.
+- Quick command palette (Cmd+P) to jump to headings (Markdown) or symbols (Python).
+- Status bar hints that adapt to the current mode and selection.
