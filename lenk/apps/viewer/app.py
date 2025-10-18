@@ -175,9 +175,31 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         self.settings_panel = tk.Frame(left_frame, bg=self.border_color, relief=tk.FLAT)
         # Don't pack yet - will show on toggle
 
-        # Full-width settings button at bottom
+        # Bottom controls container (Shortcuts + Settings)
+        bottom_controls = tk.Frame(left_frame, bg=self.bg_color)
+        bottom_controls.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+
+        # Keyboard Shortcuts button
+        self.shortcuts_button = tk.Button(
+            bottom_controls,
+            text="⌨️ Shortcuts",
+            bg="#cccccc",
+            fg="#000000",
+            activebackground="#aaaaaa",
+            activeforeground="#000000",
+            font=('Consolas', 10),
+            relief=tk.RAISED,
+            pady=8,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=self.show_shortcuts
+        )
+        self.shortcuts_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Settings button
         self.settings_button = tk.Button(
-            left_frame,
+            bottom_controls,
             text="⚙️ Settings",
             bg="#cccccc",
             fg="#000000",
@@ -191,7 +213,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             highlightthickness=0,
             command=self.toggle_settings
         )
-        self.settings_button.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        self.settings_button.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(5, 0))
 
         # Style the treeview
         style = ttk.Style()
@@ -302,6 +324,9 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         # Bind Command+Shift+Left to stop comment dictation
         self.root.bind('<Command-Shift-Left>', self.stop_comment_dictation)
+
+        # Bind Command+K to show shortcuts viewer
+        self.root.bind('<Command-k>', self.show_shortcuts)
 
         # Track which pane has focus
         self.focus_on_reader = False
@@ -682,6 +707,81 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         self.root.after(1000, reset_label)
 
+        return 'break'
+
+    def show_shortcuts(self, event=None):
+        """Display a simple Keyboard Shortcuts viewer grouped by section."""
+        # If already open, focus it
+        if getattr(self, 'shortcuts_window', None) is not None:
+            if self.shortcuts_window.winfo_exists():
+                self.shortcuts_window.lift()
+                self.shortcuts_window.focus_force()
+                return 'break'
+
+        win = tk.Toplevel(self.root)
+        win.title("Keyboard Shortcuts")
+        win.configure(bg=self.bg_color)
+        win.geometry("660x540")
+        self.shortcuts_window = win
+
+        # Close on Escape
+        win.bind('<Escape>', lambda e: win.destroy())
+
+        container = tk.Frame(win, bg=self.bg_color)
+        container.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+
+        tk.Label(container, text="Keyboard Shortcuts", bg=self.bg_color, fg=self.fg_color,
+                 font=('Consolas', 14, 'bold')).pack(anchor='w', pady=(0, 8))
+
+        scroll = tk.Scrollbar(container)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        text = tk.Text(container,
+                       bg=self.border_color,
+                       fg=self.fg_color,
+                       insertbackground=self.fg_color,
+                       wrap=tk.WORD,
+                       height=24,
+                       relief=tk.FLAT,
+                       yscrollcommand=scroll.set)
+        text.pack(fill=tk.BOTH, expand=True)
+        scroll.config(command=text.yview)
+
+        # Sections and shortcuts
+        sections = [
+            ("General", [
+                ("Cmd+K", "Open this shortcuts viewer"),
+                ("Cmd+R", "Refresh trees (files and favorites)"),
+                ("Cmd+/", "Toggle focus between left pane and reader"),
+            ]),
+            ("File/Export", [
+                ("Cmd+E", "Save annotated copy of current markdown"),
+            ]),
+            ("Cell Navigation", [
+                ("Up/Down", "Move to previous/next cell"),
+                ("Left", "Start/stop reading current cell"),
+                ("Right", "View comments for current cell"),
+            ]),
+            ("Comments", [
+                ("Cmd+Shift+Up", "Read previous comment (voice)"),
+                ("Cmd+Shift+Down", "Read next comment (voice)"),
+                ("Cmd+Shift+Left", "Stop reading comment (voice)"),
+                ("Cmd+Enter (in comment box)", "Save new comment or @chat question"),
+            ]),
+            ("Mouse & Tips", [
+                ("Right‑click/Ctrl‑click in trees", "Toggle star on a file or folder"),
+            ]),
+        ]
+
+        text.tag_configure('section', foreground=self.fg_color, font=('Consolas', 12, 'bold'))
+
+        for title, items in sections:
+            text.insert(tk.END, f"{title}\n", 'section')
+            for keys, desc in items:
+                text.insert(tk.END, f"  • {keys}: {desc}\n")
+            text.insert(tk.END, "\n")
+
+        text.config(state=tk.DISABLED)
         return 'break'
 
     def populate_tree(self, parent='', path=None):
