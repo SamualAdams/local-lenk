@@ -919,8 +919,13 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 continue
 
             # Hide Python dunder files/directories (__name__ or __name__.py)
-            if item.startswith('__') and (item.endswith('__') or item.endswith('__.py')):
-                continue
+            if item.startswith('__'):
+                # For directories, check if ends with __
+                if item.endswith('__'):
+                    continue
+                # For .py files, check if the name without .py ends with __
+                if item.endswith('.py') and item[:-3].endswith('__'):
+                    continue
 
             item_path = os.path.join(path, item)
 
