@@ -397,19 +397,35 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
     def restore_session(self):
         """Restore the previous session state"""
-        saved_dir, saved_file, saved_cell = self.load_session_state()
+        try:
+            saved_dir, saved_file, saved_cell = self.load_session_state()
 
-        # Restore directory if available
-        if saved_dir and os.path.isdir(saved_dir):
-            self.current_root = saved_dir
-            self.path_entry.delete(0, tk.END)
-            self.path_entry.insert(0, saved_dir)
-            self.refresh_tree()
+            # Restore directory if available
+            if saved_dir and os.path.isdir(saved_dir):
+                self.current_root = saved_dir
+                self.path_entry.delete(0, tk.END)
+                self.path_entry.insert(0, saved_dir)
+                try:
+                    self.refresh_tree()
+                except Exception as e:
+                    print(f"Error refreshing tree: {e}")
+                    # Reset to home on error
+                    self.current_root = self.home_directory
+                    self.path_entry.delete(0, tk.END)
+                    self.path_entry.insert(0, self.home_directory)
 
-        # Restore file if available
-        if saved_file and os.path.isfile(saved_file):
-            # Use root.after to ensure UI is fully initialized
-            self.root.after(100, lambda: self._restore_file_and_cell(saved_file, saved_cell))
+            # Restore file if available
+            if saved_file and os.path.isfile(saved_file):
+                # Check file size before attempting to load (skip files > 10MB)
+                file_size = os.path.getsize(saved_file)
+                if file_size < 10 * 1024 * 1024:  # 10MB limit
+                    # Use root.after to ensure UI is fully initialized
+                    self.root.after(100, lambda: self._restore_file_and_cell(saved_file, saved_cell))
+                else:
+                    print(f"Skipping large file ({file_size} bytes): {saved_file}")
+        except Exception as e:
+            print(f"Error restoring session: {e}")
+            # Continue with default state
 
     def _restore_file_and_cell(self, file_path, cell_index):
         """Helper method to restore file and cell position"""
@@ -859,14 +875,25 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         text.config(state=tk.DISABLED)
         return 'break'
 
-    def populate_tree(self, parent='', path=None):
+    def populate_tree(self, parent='', path=None, depth=0, max_depth=10):
         """Populate tree view with directory structure"""
         if path is None:
             path = self.current_root
 
+        # Prevent infinite recursion and symlink loops
+        if depth >= max_depth:
+            return
+
+        # Skip symlinks to prevent loops
+        if os.path.islink(path):
+            return
+
         try:
             items = sorted(os.listdir(path))
-        except PermissionError:
+            # Limit items to prevent UI freeze on huge directories
+            if len(items) > 1000:
+                items = items[:1000]
+        except (PermissionError, OSError):
             return
 
         for item in items:
@@ -876,6 +903,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             item_path = os.path.join(path, item)
 
             try:
+                # Skip symlinks
+                if os.path.islink(item_path):
+                    continue
+
                 is_dir = os.path.isdir(item_path)
                 is_markdown = item.endswith('.md')
 
@@ -895,7 +926,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 if is_dir:
                     if item_path in self.tree_open_paths:
                         self.tree.item(node, open=True)
-                        self.populate_tree(node, item_path)
+                        self.populate_tree(node, item_path, depth=depth+1, max_depth=max_depth)
                     else:
                         self.tree.insert(node, 'end', text='Loading...')
 
@@ -922,11 +953,22 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         """Handle folder collapse events"""
         self.schedule_navigation_state_save()
 
-    def populate_favorites_subtree(self, parent, path):
+    def populate_favorites_subtree(self, parent, path, depth=0, max_depth=10):
         """Populate subtree in favorites tree"""
+        # Prevent infinite recursion
+        if depth >= max_depth:
+            return
+
+        # Skip symlinks to prevent loops
+        if os.path.islink(path):
+            return
+
         try:
             items = sorted(os.listdir(path))
-        except PermissionError:
+            # Limit items to prevent UI freeze
+            if len(items) > 1000:
+                items = items[:1000]
+        except (PermissionError, OSError):
             return
 
         for item in items:
@@ -936,6 +978,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             item_path = os.path.join(path, item)
 
             try:
+                # Skip symlinks
+                if os.path.islink(item_path):
+                    continue
+
                 is_dir = os.path.isdir(item_path)
                 is_markdown = item.endswith('.md')
 
@@ -955,7 +1001,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 if is_dir:
                     if item_path in self.favorites_open_paths:
                         self.favorites_tree.item(node, open=True)
-                        self.populate_favorites_subtree(node, item_path)
+                        self.populate_favorites_subtree(node, item_path, depth=depth+1, max_depth=max_depth)
                     else:
                         self.favorites_tree.insert(node, 'end', text='Loading...')
 
@@ -1732,7 +1778,17 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
     def parse_markdown_cells(self, content):
         """Parse markdown content into cells based on headings"""
+        # Safety limit - don't parse files that are too large
+        if len(content) > 5 * 1024 * 1024:  # 5MB text limit
+            self.cells = ["[File too large to parse into cells - displaying as single block]", content[:100000]]
+            return
+
         lines = content.split('\n')
+
+        # Safety limit on number of lines
+        if len(lines) > 50000:
+            lines = lines[:50000]
+
         current_cell = []
 
         for line in lines:
@@ -1747,6 +1803,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         if not self.cells:
             self.cells = [content]
+
+        # Limit number of cells to prevent UI freeze
+        if len(self.cells) > 1000:
+            self.cells = self.cells[:1000] + ["[Remaining cells truncated - file too large]"]
 
     def display_file(self, file_path):
         """Display file content"""
