@@ -59,10 +59,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Settings expanded state
         self.settings_expanded = False
 
-        # Tab state tracking
+        # Tab state tracking (2 tabs: Favorites and Directories)
         self.current_tab = 0
-        self.tab_selections = {0: None, 1: None, 2: None}  # Selected path per tab
-        self.tab_open_paths = {0: set(), 1: set(), 2: set()}  # Expanded folders per tab
+        self.tab_selections = {0: None, 1: None}  # Selected path per tab
+        self.tab_open_paths = {0: set(), 1: set()}  # Expanded folders per tab
 
         # Path entry toolbar (shared across all tabs)
         toolbar = tk.Frame(left_frame, bg=self.bg_color)
@@ -122,17 +122,11 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         self.favorites_tree.pack(fill=tk.BOTH, expand=True)
         self.notebook.add(favorites_frame, text='⭐ Favorites')
 
-        # Tab 1: Markdown & Dirs
-        markdown_frame = tk.Frame(self.notebook, bg=self.bg_color)
-        self.markdown_tree = ttk.Treeview(markdown_frame, selectmode='browse')
-        self.markdown_tree.pack(fill=tk.BOTH, expand=True)
-        self.notebook.add(markdown_frame, text='📝 Markdown')
-
-        # Tab 2: Python & Dirs
-        python_frame = tk.Frame(self.notebook, bg=self.bg_color)
-        self.tree = ttk.Treeview(python_frame, selectmode='browse')
+        # Tab 1: Directories (all files)
+        directories_frame = tk.Frame(self.notebook, bg=self.bg_color)
+        self.tree = ttk.Treeview(directories_frame, selectmode='browse')
         self.tree.pack(fill=tk.BOTH, expand=True)
-        self.notebook.add(python_frame, text='🐍 Python')
+        self.notebook.add(directories_frame, text='📁 Directories')
 
         # Bind tab change event
         self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
@@ -274,8 +268,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         self._py_outline_cache = {}
         self._py_current_content = None  # Cache Python file content to avoid re-reading
 
-        # Bind tree selection events for all three trees
-        # Python tab tree (self.tree)
+        # Bind tree selection events
+        # Directories tab tree (self.tree)
         self.tree.bind('<<TreeviewSelect>>', self.on_file_select)
         self.tree.bind('<Button-2>', self.toggle_star)
         self.tree.bind('<Button-3>', self.toggle_star)
@@ -290,14 +284,6 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         self.favorites_tree.bind('<Control-Button-1>', self.toggle_star)
         self.favorites_tree.bind('<<TreeviewOpen>>', self.on_folder_open)
         self.favorites_tree.bind('<<TreeviewClose>>', self.on_folder_close)
-
-        # Markdown tab tree
-        self.markdown_tree.bind('<<TreeviewSelect>>', self.on_file_select)
-        self.markdown_tree.bind('<Button-2>', self.toggle_star)
-        self.markdown_tree.bind('<Button-3>', self.toggle_star)
-        self.markdown_tree.bind('<Control-Button-1>', self.toggle_star)
-        self.markdown_tree.bind('<<TreeviewOpen>>', self.on_folder_open)
-        self.markdown_tree.bind('<<TreeviewClose>>', self.on_folder_close)
 
         # Cell navigation for markdown
         self.cells = []  # List of cell content (text)
@@ -348,10 +334,9 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         self.is_narrating = False  # Currently narrating flag
         self.narration_process = None  # Current narration subprocess
 
-        # Populate all three tabs
+        # Populate both tabs
         self.populate_favorites()
-        self.populate_markdown_tree()
-        self.populate_python_tree()
+        self.populate_directories_tree()
 
         # Restore previous session
         self.restore_session()
@@ -367,11 +352,9 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 self.path_entry.delete(0, tk.END)
                 self.path_entry.insert(0, saved_dir)
                 try:
-                    # Refresh all tabs with new root
-                    self.markdown_tree.delete(*self.markdown_tree.get_children())
-                    self.populate_markdown_tree()
+                    # Refresh directories tab with new root
                     self.tree.delete(*self.tree.get_children())
-                    self.populate_python_tree()
+                    self.populate_directories_tree()
                 except Exception as e:
                     print(f"Error refreshing trees: {e}")
                     # Reset to home on error
@@ -733,19 +716,14 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             # Favorites tab
             self.populate_favorites()
         elif new_tab == 1:
-            # Markdown tab
-            self.populate_markdown_tree()
-        elif new_tab == 2:
-            # Python tab
-            self.populate_python_tree()
+            # Directories tab
+            self.populate_directories_tree()
 
     def save_current_tab_state(self):
         """Save the current tab's tree state (selection, open paths)"""
         if self.current_tab == 0:
             tree = self.favorites_tree
-        elif self.current_tab == 1:
-            tree = self.markdown_tree
-        else:
+        else:  # Tab 1
             tree = self.tree
 
         # Save selection
@@ -762,9 +740,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         """Load the specified tab's tree state (selection, open paths)"""
         if tab_index == 0:
             tree = self.favorites_tree
-        elif tab_index == 1:
-            tree = self.markdown_tree
-        else:
+        else:  # Tab 1
             tree = self.tree
 
         # Restore selection if exists
@@ -779,11 +755,9 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         if os.path.isdir(path):
             self.current_root = path
-            # Refresh markdown and python tabs with new root (favorites stays same)
-            self.markdown_tree.delete(*self.markdown_tree.get_children())
-            self.populate_markdown_tree()
+            # Refresh directories tab with new root (favorites stays same)
             self.tree.delete(*self.tree.get_children())
-            self.populate_python_tree()
+            self.populate_directories_tree()
             self.save_session_state()
         else:
             self.path_label.config(text=f"Error: '{path}' is not a valid directory")
@@ -793,28 +767,22 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         if self.current_tab == 0:
             self.favorites_tree.delete(*self.favorites_tree.get_children())
             self.populate_favorites()
-        elif self.current_tab == 1:
-            self.markdown_tree.delete(*self.markdown_tree.get_children())
-            self.populate_markdown_tree(path=self.current_root)
-        else:  # tab 2
+        else:  # Tab 1: Directories
             self.tree.delete(*self.tree.get_children())
-            self.populate_python_tree(path=self.current_root)
+            self.populate_directories_tree(path=self.current_root)
 
     def refresh_tree_manual(self, event=None):
         """Manually refresh all tabs (triggered by Command+R)"""
-        # Refresh all three tabs
+        # Refresh both tabs
         self.favorites_tree.delete(*self.favorites_tree.get_children())
         self.populate_favorites()
 
-        self.markdown_tree.delete(*self.markdown_tree.get_children())
-        self.populate_markdown_tree(path=self.current_root)
-
         self.tree.delete(*self.tree.get_children())
-        self.populate_python_tree(path=self.current_root)
+        self.populate_directories_tree(path=self.current_root)
 
         # Show brief confirmation in path label
         original_text = self.path_label.cget('text')
-        self.path_label.config(text="🔄 All tabs refreshed")
+        self.path_label.config(text="🔄 Tabs refreshed")
 
         def reset_label():
             self.path_label.config(text=original_text)
@@ -893,8 +861,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         text.config(state=tk.DISABLED)
         return 'break'
 
-    def populate_python_tree(self, parent='', path=None, depth=0, max_depth=10):
-        """Populate Python tab tree with .py files and directories"""
+    def populate_directories_tree(self, parent='', path=None, depth=0, max_depth=10):
+        """Populate Directories tab tree with all files and directories"""
         if path is None:
             path = self.current_root
 
@@ -918,15 +886,6 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             if item.startswith('.'):
                 continue
 
-            # Hide Python dunder files/directories (__name__ or __name__.py)
-            if item.startswith('__'):
-                # For directories, check if ends with __
-                if item.endswith('__'):
-                    continue
-                # For .py files, check if the name without .py ends with __
-                if item.endswith('.py') and item[:-3].endswith('__'):
-                    continue
-
             item_path = os.path.join(path, item)
 
             try:
@@ -935,14 +894,11 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                     continue
 
                 is_dir = os.path.isdir(item_path)
-                is_python = item.endswith('.py')
 
-                # Python tab only shows .py files and directories
-                if not is_dir and not is_python:
-                    continue
+                # Show all files and directories (no filter)
 
                 display_name = f'⭐ {item}' if self.is_starred(item_path) else item
-                open_paths = self.tab_open_paths.get(2, set())  # Tab 2 is Python
+                open_paths = self.tab_open_paths.get(1, set())  # Tab 1 is Directories
 
                 node = self.tree.insert(
                     parent,
@@ -955,7 +911,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 if is_dir:
                     if item_path in open_paths:
                         self.tree.item(node, open=True)
-                        self.populate_python_tree(node, item_path, depth=depth+1, max_depth=max_depth)
+                        self.populate_directories_tree(node, item_path, depth=depth+1, max_depth=max_depth)
                     else:
                         self.tree.insert(node, 'end', text='Loading...')
 
@@ -1385,9 +1341,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         """Focus the tree of the currently active tab"""
         if self.current_tab == 0:
             self.favorites_tree.focus_set()
-        elif self.current_tab == 1:
-            self.markdown_tree.focus_set()
-        else:  # tab 2
+        else:  # Tab 1: Directories
             self.tree.focus_set()
 
     def save_annotated_file(self, event):
