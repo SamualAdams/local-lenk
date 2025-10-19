@@ -296,6 +296,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         # Cache for docstrings and nodes
         self._py_outline_cache = {}
+        self._py_current_content = None  # Cache Python file content to avoid re-reading
 
         # Bind tree selection events
         self.tree.bind('<<TreeviewSelect>>', self.on_file_select)
@@ -1900,19 +1901,47 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             return
 
         try:
+            # Check file size first
+            file_size = os.path.getsize(self.current_file)
+
+            # Warn about large files (> 500KB)
+            if file_size > 500 * 1024:
+                self.path_label.config(text=f"⚠️ Large file ({file_size // 1024}KB) - parsing may be slow...")
+                self.root.update()
+            else:
+                self.path_label.config(text="⏳ Parsing Python file...")
+                self.root.update()
+
             # Read the file content
             with open(self.current_file, 'r', encoding='utf-8') as f:
                 content = f.read()
 
+            # Limit content size to prevent UI freeze (max 2MB of Python code)
+            if len(content) > 2 * 1024 * 1024:
+                self.text_widget.delete('1.0', tk.END)
+                self.text_widget.insert('1.0', f"Python file too large to render outline ({len(content) // 1024}KB).\n\n")
+                self.text_widget.insert(tk.END, "Showing first 100 lines of raw code:\n\n")
+                lines = content.split('\n')[:100]
+                self.text_widget.insert(tk.END, '\n'.join(lines))
+                self.path_label.config(text=self.current_file)
+                return
+
             # Call the existing Python view rendering
             self.show_python_view(self.current_file, content)
+
+            # Restore path label after successful render
+            self.path_label.config(text=self.current_file)
         except Exception as e:
             # Show error in text view
             self.text_widget.delete('1.0', tk.END)
             self.text_widget.insert('1.0', f"Error rendering Python file:\n{str(e)}")
+            self.path_label.config(text=self.current_file)
 
     def show_python_view(self, file_path, content):
         """Show the Python outline + code viewer for the given file content."""
+        # Cache the content to avoid re-reading file on every symbol select
+        self._py_current_content = content
+
         # Hide text view
         try:
             self.text_frame.pack_forget()
@@ -1950,13 +1979,34 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Cache docstrings by iid
         self._py_outline_cache.clear()
 
+        # Limit top-level items to prevent UI freeze on huge files
+        max_top_level_items = 500
+        items_processed = 0
+
         for node in tree.body:
+            if items_processed >= max_top_level_items:
+                # Add indicator that outline was truncated
+                self.py_outline.insert(root_id, 'end', text=f"... ({len(tree.body) - items_processed} more items truncated)", values=("truncated", 0, 0))
+                break
+            items_processed += 1
             if isinstance(node, ast.ClassDef):
                 doc = ast.get_docstring(node) or ""
                 iid = self.py_outline.insert(root_id, 'end', text=f"class {node.name}", values=("class", node.lineno, get_end_lineno(node)))
                 self._py_outline_cache[iid] = {"doc": doc, "type": "class"}
+
+                # Limit methods per class to prevent UI freeze
+                max_methods_per_class = 100
+                methods_processed = 0
+
                 for sub in node.body:
                     if isinstance(sub, ast.FunctionDef) or isinstance(sub, ast.AsyncFunctionDef):
+                        if methods_processed >= max_methods_per_class:
+                            # Add indicator that methods were truncated
+                            remaining = sum(1 for s in node.body if isinstance(s, (ast.FunctionDef, ast.AsyncFunctionDef))) - methods_processed
+                            self.py_outline.insert(iid, 'end', text=f"... ({remaining} more methods truncated)", values=("truncated", 0, 0))
+                            break
+                        methods_processed += 1
+
                         sdoc = ast.get_docstring(sub) or ""
                         smark = "async def" if isinstance(sub, ast.AsyncFunctionDef) else "def"
                         sid = self.py_outline.insert(iid, 'end', text=f"{smark} {sub.name}()", values=("method", sub.lineno, get_end_lineno(sub)))
@@ -1992,14 +2042,17 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             return
         node_type, start, end = vals[0], int(vals[1]), int(vals[2])
 
-        # Load the file content
-        try:
-            with open(self.current_file, 'r', encoding='utf-8') as f:
-                content = f.read()
-        except Exception as e:
-            self.py_text.delete('1.0', tk.END)
-            self.py_text.insert('1.0', f"Error reading file: {e}")
-            return
+        # Use cached content instead of re-reading file (major perf improvement!)
+        content = getattr(self, '_py_current_content', None)
+        if not content:
+            # Fallback: read from file if cache not available
+            try:
+                with open(self.current_file, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            except Exception as e:
+                self.py_text.delete('1.0', tk.END)
+                self.py_text.insert('1.0', f"Error reading file: {e}")
+                return
 
         lines = content.splitlines()
         snippet = "\n".join(lines[start-1:end])
