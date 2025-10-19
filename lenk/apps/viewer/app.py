@@ -667,11 +667,9 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                     self.save_setting('home_directory', new_home)
                     self.path_entry.delete(0, tk.END)
                     self.path_entry.insert(0, new_home)
-                    # Refresh markdown and python tabs with new home
-                    self.markdown_tree.delete(*self.markdown_tree.get_children())
-                    self.populate_markdown_tree()
+                    # Refresh directories tab with new home (favorites auto-updates)
                     self.tree.delete(*self.tree.get_children())
-                    self.populate_python_tree()
+                    self.populate_directories_tree()
 
                 self.voice_speed = new_speed
                 self.save_setting('voice_speed', new_speed)
@@ -863,6 +861,13 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
     def populate_directories_tree(self, parent='', path=None, depth=0, max_depth=10):
         """Populate Directories tab tree with all files and directories"""
+        # Clear tree only on root-level population (when parent is empty and depth is 0)
+        if parent == '' and depth == 0:
+            self.tree.delete(*self.tree.get_children())
+            # Configure tree columns (like in populate_favorites)
+            self.tree['columns'] = ()
+            self.tree.column('#0', width=400)
+
         if path is None:
             path = self.current_root
 
@@ -918,75 +923,6 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             except (PermissionError, OSError):
                 continue
 
-    def populate_markdown_tree(self, parent='', path=None, depth=0, max_depth=10):
-        """Populate Markdown tab tree with .md files and directories"""
-        if path is None:
-            path = self.current_root
-
-        # Prevent infinite recursion and symlink loops
-        if depth >= max_depth:
-            return
-
-        # Skip symlinks to prevent loops
-        if os.path.islink(path):
-            return
-
-        try:
-            items = sorted(os.listdir(path))
-            # Limit items to prevent UI freeze on huge directories
-            if len(items) > 1000:
-                items = items[:1000]
-        except (PermissionError, OSError):
-            return
-
-        for item in items:
-            if item.startswith('.'):
-                continue
-
-            # Hide Python dunder files/directories (__name__ or __name__.py)
-            if item.startswith('__'):
-                # For directories, check if ends with __
-                if item.endswith('__'):
-                    continue
-                # For .py files, check if the name without .py ends with __
-                if item.endswith('.py') and item[:-3].endswith('__'):
-                    continue
-
-            item_path = os.path.join(path, item)
-
-            try:
-                # Skip symlinks
-                if os.path.islink(item_path):
-                    continue
-
-                is_dir = os.path.isdir(item_path)
-                is_markdown = item.endswith('.md')
-
-                # Markdown tab only shows .md files and directories
-                if not is_dir and not is_markdown:
-                    continue
-
-                display_name = f'⭐ {item}' if self.is_starred(item_path) else item
-                open_paths = self.tab_open_paths.get(1, set())  # Tab 1 is Markdown
-
-                node = self.markdown_tree.insert(
-                    parent,
-                    'end',
-                    text=display_name,
-                    values=[item_path],
-                    open=False
-                )
-
-                if is_dir:
-                    if item_path in open_paths:
-                        self.markdown_tree.item(node, open=True)
-                        self.populate_markdown_tree(node, item_path, depth=depth+1, max_depth=max_depth)
-                    else:
-                        self.markdown_tree.insert(node, 'end', text='Loading...')
-
-            except (PermissionError, OSError):
-                continue
-
     def on_folder_open(self, event):
         """Handle folder expansion"""
         widget = event.widget
@@ -997,9 +933,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             widget.delete(children[0])
             path = widget.item(node)['values'][0]
             if widget == self.tree:
-                self.populate_python_tree(node, path)
-            elif widget == self.markdown_tree:
-                self.populate_markdown_tree(node, path)
+                # Directories tab
+                self.populate_directories_tree(node, path)
             else:  # favorites_tree
                 self.populate_favorites_subtree(node, path)
 
