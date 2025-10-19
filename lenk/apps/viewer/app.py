@@ -142,12 +142,12 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Don't pack yet - will show on toggle
 
         # Bottom controls container (Shortcuts + Settings)
-        bottom_controls = tk.Frame(left_frame, bg=self.bg_color)
-        bottom_controls.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
+        self.bottom_controls = tk.Frame(left_frame, bg=self.bg_color)
+        self.bottom_controls.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
 
         # Keyboard Shortcuts button
         self.shortcuts_button = tk.Button(
-            bottom_controls,
+            self.bottom_controls,
             text="⌨️ Shortcuts",
             bg="#cccccc",
             fg="#000000",
@@ -165,7 +165,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
 
         # Settings button
         self.settings_button = tk.Button(
-            bottom_controls,
+            self.bottom_controls,
             text="⚙️ Settings",
             bg="#cccccc",
             fg="#000000",
@@ -500,7 +500,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 widget.destroy()
 
             self.settings_panel.config(bg=self.border_color, padx=10, pady=10)
-            self.settings_panel.pack(side=tk.BOTTOM, fill=tk.X, before=self.settings_button, padx=5, pady=(0, 5))
+            # Pack settings panel before the bottom_controls frame for proper positioning
+            self.settings_panel.pack(side=tk.BOTTOM, fill=tk.X, before=self.bottom_controls, padx=5, pady=(0, 5))
 
             # Home Directory setting
             tk.Label(
@@ -683,7 +684,11 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                     self.save_setting('home_directory', new_home)
                     self.path_entry.delete(0, tk.END)
                     self.path_entry.insert(0, new_home)
-                    self.refresh_tree()
+                    # Refresh markdown and python tabs with new home
+                    self.markdown_tree.delete(*self.markdown_tree.get_children())
+                    self.populate_markdown_tree()
+                    self.tree.delete(*self.tree.get_children())
+                    self.populate_python_tree()
 
                 self.voice_speed = new_speed
                 self.save_setting('voice_speed', new_speed)
