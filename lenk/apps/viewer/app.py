@@ -458,10 +458,8 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 name = os.path.basename(path)
                 is_dir = os.path.isdir(path)
 
-                # Show directory path in a muted way with visual separator
-                dir_path = os.path.dirname(path)
-                # Use subtle separator and lighter color indicator
-                display_text = f'⭐ {name}  ‹ {dir_path}'
+                # Just show the starred item name
+                display_text = f'⭐ {name}'
 
                 node = self.favorites_tree.insert(
                     '',
