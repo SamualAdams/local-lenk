@@ -59,10 +59,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Settings expanded state
         self.settings_expanded = False
 
-        # Tab state tracking (2 tabs: Favorites and Directories)
-        self.current_tab = 0
-        self.tab_selections = {0: None, 1: None}  # Selected path per tab
-        self.tab_open_paths = {0: set(), 1: set()}  # Expanded folders per tab
+        # Menu expansion state tracking
+        self.expanded_menu_item = None  # Which accordion item is expanded (None, 'directories', 'paste', 'settings')
+        self.favorites_open_paths = set()  # Expanded folders in favorites tree
+        self.directories_open_paths = set()  # Expanded folders in directories tree
 
         # Path entry toolbar (shared across all tabs)
         toolbar = tk.Frame(left_frame, bg=self.bg_color)
@@ -107,54 +107,110 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         )
         nav_button.pack(side=tk.LEFT)
 
-        # New Paste button
-        paste_button = tk.Button(
-            path_frame,
-            text="📋 New Paste",
-            bg=self.button_color,
-            fg=self.button_text_color,
-            activebackground=self.button_active_color,
-            activeforeground=self.button_text_color,
+        # Main content frame (holds favorites + accordion menu)
+        content_frame = tk.Frame(left_frame, bg=self.bg_color)
+        content_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        # ========== FAVORITES SECTION (always visible) ==========
+        favorites_container = tk.Frame(content_frame, bg=self.bg_color)
+        favorites_container.pack(fill=tk.BOTH, expand=True)
+
+        # Favorites header
+        favorites_header = tk.Frame(favorites_container, bg=self.border_color)
+        favorites_header.pack(fill=tk.X, pady=(0, 2))
+
+        tk.Label(
+            favorites_header,
+            text="⭐ Favorites",
+            bg=self.border_color,
+            fg=self.fg_color,
             font=('Consolas', 10, 'bold'),
-            relief=tk.RAISED,
-            padx=15,
-            pady=2,
-            cursor='hand2',
-            borderwidth=1,
-            highlightthickness=0,
-            command=self.show_paste_dialog
-        )
-        paste_button.pack(side=tk.LEFT, padx=(5, 0))
+            anchor='w',
+            padx=10,
+            pady=5
+        ).pack(fill=tk.X)
 
-        # Create tabbed notebook
-        style = ttk.Style()
-        style.configure('TNotebook', background=self.bg_color, borderwidth=0)
-        style.configure('TNotebook.Tab', background='#cccccc', foreground='#000000', padding=[10, 5], font=('Consolas', 10))
-        style.map('TNotebook.Tab', background=[('selected', self.button_color)], foreground=[('selected', self.button_text_color)])
-
-        self.notebook = ttk.Notebook(left_frame)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
-
-        # Tab 0: Favorites
-        favorites_frame = tk.Frame(self.notebook, bg=self.bg_color)
-        self.favorites_tree = ttk.Treeview(favorites_frame, selectmode='browse')
+        # Favorites tree
+        favorites_tree_frame = tk.Frame(favorites_container, bg=self.bg_color)
+        favorites_tree_frame.pack(fill=tk.BOTH, expand=True)
+        self.favorites_tree = ttk.Treeview(favorites_tree_frame, selectmode='browse')
         self.favorites_tree.pack(fill=tk.BOTH, expand=True)
-        self.notebook.add(favorites_frame, text='⭐ Favorites')
 
-        # Tab 1: Directories (all files)
-        directories_frame = tk.Frame(self.notebook, bg=self.bg_color)
-        self.tree = ttk.Treeview(directories_frame, selectmode='browse')
+        # ========== ACCORDION MENU (expandable items) ==========
+        accordion_container = tk.Frame(content_frame, bg=self.bg_color)
+        accordion_container.pack(fill=tk.X, pady=(5, 0))
+
+        # Menu item: Directories
+        self.directories_header_frame = tk.Frame(accordion_container, bg=self.border_color, cursor='hand2')
+        self.directories_header_frame.pack(fill=tk.X, pady=(0, 2))
+
+        self.directories_header_button = tk.Label(
+            self.directories_header_frame,
+            text="📁 Directories ▶",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 10, 'bold'),
+            anchor='w',
+            padx=10,
+            pady=5,
+            cursor='hand2'
+        )
+        self.directories_header_button.pack(fill=tk.X)
+        self.directories_header_button.bind('<Button-1>', lambda e: self.toggle_accordion_item('directories'))
+        self.directories_header_frame.bind('<Button-1>', lambda e: self.toggle_accordion_item('directories'))
+
+        self.directories_content_frame = tk.Frame(accordion_container, bg=self.bg_color)
+        # Don't pack yet - will show when expanded
+
+        self.tree = ttk.Treeview(self.directories_content_frame, selectmode='browse', height=10)
         self.tree.pack(fill=tk.BOTH, expand=True)
-        self.notebook.add(directories_frame, text='📁 Directories')
 
-        # Bind tab change event
-        self.notebook.bind('<<NotebookTabChanged>>', self.on_tab_changed)
+        # Menu item: New Paste
+        self.paste_header_frame = tk.Frame(accordion_container, bg=self.border_color, cursor='hand2')
+        self.paste_header_frame.pack(fill=tk.X, pady=(0, 2))
 
-        # Settings panel (collapsible) at bottom
-        self.settings_panel = tk.Frame(left_frame, bg=self.border_color, relief=tk.FLAT)
-        # Don't pack yet - will show on toggle
+        self.paste_header_button = tk.Label(
+            self.paste_header_frame,
+            text="📋 New Paste ▶",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 10, 'bold'),
+            anchor='w',
+            padx=10,
+            pady=5,
+            cursor='hand2'
+        )
+        self.paste_header_button.pack(fill=tk.X)
+        self.paste_header_button.bind('<Button-1>', lambda e: self.toggle_accordion_item('paste'))
+        self.paste_header_frame.bind('<Button-1>', lambda e: self.toggle_accordion_item('paste'))
 
-        # Bottom controls container (Shortcuts + Settings)
+        self.paste_content_frame = tk.Frame(accordion_container, bg=self.bg_color)
+        # Don't pack yet - will show when expanded
+        # Content will be populated by show_paste_inline()
+
+        # Menu item: Settings
+        self.settings_header_frame = tk.Frame(accordion_container, bg=self.border_color, cursor='hand2')
+        self.settings_header_frame.pack(fill=tk.X, pady=(0, 2))
+
+        self.settings_header_button = tk.Label(
+            self.settings_header_frame,
+            text="⚙️ Settings ▶",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 10, 'bold'),
+            anchor='w',
+            padx=10,
+            pady=5,
+            cursor='hand2'
+        )
+        self.settings_header_button.pack(fill=tk.X)
+        self.settings_header_button.bind('<Button-1>', lambda e: self.toggle_accordion_item('settings'))
+        self.settings_header_frame.bind('<Button-1>', lambda e: self.toggle_accordion_item('settings'))
+
+        self.settings_content_frame = tk.Frame(accordion_container, bg=self.bg_color)
+        # Don't pack yet - will show when expanded
+
+        # Bottom controls container (Shortcuts button only)
         self.bottom_controls = tk.Frame(left_frame, bg=self.bg_color)
         self.bottom_controls.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
 
@@ -174,25 +230,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             highlightthickness=0,
             command=self.show_shortcuts
         )
-        self.shortcuts_button.pack(side=tk.LEFT, fill=tk.X, expand=True)
-
-        # Settings button
-        self.settings_button = tk.Button(
-            self.bottom_controls,
-            text="⚙️ Settings",
-            bg="#cccccc",
-            fg="#000000",
-            activebackground="#aaaaaa",
-            activeforeground="#000000",
-            font=('Consolas', 10),
-            relief=tk.RAISED,
-            pady=8,
-            cursor='hand2',
-            borderwidth=1,
-            highlightthickness=0,
-            command=self.toggle_settings
-        )
-        self.settings_button.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(5, 0))
+        self.shortcuts_button.pack(fill=tk.X)
 
         # Style the treeview
         style = ttk.Style()
@@ -714,56 +752,314 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 command=save_settings
             ).pack(pady=(10, 5))
 
-    def on_tab_changed(self, event):
-        """Handle tab switching - save old tab state, load new tab state"""
-        # Get new tab index
-        new_tab = self.notebook.index(self.notebook.select())
+    def toggle_accordion_item(self, item_name):
+        """Toggle expansion of an accordion menu item"""
+        # If clicking the currently expanded item, collapse it
+        if self.expanded_menu_item == item_name:
+            # Collapse current item
+            if item_name == 'directories':
+                self.directories_content_frame.pack_forget()
+                self.directories_header_button.config(text="📁 Directories ▶")
+            elif item_name == 'paste':
+                self.paste_content_frame.pack_forget()
+                self.paste_header_button.config(text="📋 New Paste ▶")
+            elif item_name == 'settings':
+                self.settings_content_frame.pack_forget()
+                self.settings_header_button.config(text="⚙️ Settings ▶")
 
-        # Save state from current tab before switching
-        self.save_current_tab_state()
+            self.expanded_menu_item = None
+        else:
+            # Collapse previously expanded item (if any)
+            if self.expanded_menu_item == 'directories':
+                self.directories_content_frame.pack_forget()
+                self.directories_header_button.config(text="📁 Directories ▶")
+            elif self.expanded_menu_item == 'paste':
+                self.paste_content_frame.pack_forget()
+                self.paste_header_button.config(text="📋 New Paste ▶")
+            elif self.expanded_menu_item == 'settings':
+                self.settings_content_frame.pack_forget()
+                self.settings_header_button.config(text="⚙️ Settings ▶")
 
-        # Update current tab
-        self.current_tab = new_tab
+            # Expand the clicked item
+            if item_name == 'directories':
+                self.directories_header_button.config(text="📁 Directories ▼")
+                self.directories_content_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2), after=self.directories_header_frame)
+                # Populate directories tree if empty
+                if not self.tree.get_children():
+                    self.populate_directories_tree()
+            elif item_name == 'paste':
+                self.paste_header_button.config(text="📋 New Paste ▼")
+                # Clear and rebuild paste content
+                for widget in self.paste_content_frame.winfo_children():
+                    widget.destroy()
+                self.build_paste_inline_ui()
+                self.paste_content_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2), after=self.paste_header_frame)
+            elif item_name == 'settings':
+                self.settings_header_button.config(text="⚙️ Settings ▼")
+                # Clear and rebuild settings content
+                for widget in self.settings_content_frame.winfo_children():
+                    widget.destroy()
+                self.build_settings_inline_ui()
+                self.settings_content_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 2), after=self.settings_header_frame)
 
-        # Load state for new tab
-        self.load_tab_state(new_tab)
+            self.expanded_menu_item = item_name
 
-        # Repopulate the active tree
-        if new_tab == 0:
-            # Favorites tab
-            self.populate_favorites()
-        elif new_tab == 1:
-            # Directories tab
-            self.populate_directories_tree()
+    def build_paste_inline_ui(self):
+        """Build the paste UI inline in the accordion"""
+        # Instruction label
+        label = tk.Label(
+            self.paste_content_frame,
+            text="Paste your content below (split by blank lines into cells):",
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Consolas', 9)
+        )
+        label.pack(fill=tk.X, pady=(5, 5), padx=10)
 
-    def save_current_tab_state(self):
-        """Save the current tab's tree state (selection, open paths)"""
-        if self.current_tab == 0:
-            tree = self.favorites_tree
-        else:  # Tab 1
-            tree = self.tree
+        # Text area for pasting
+        text_frame = tk.Frame(self.paste_content_frame, bg=self.border_color)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 5), padx=10)
 
-        # Save selection
-        selection = tree.selection()
-        if selection:
-            values = tree.item(selection[0]).get('values')
-            if values:
-                self.tab_selections[self.current_tab] = values[0]
+        paste_text = tk.Text(
+            text_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Consolas', 9),
+            wrap=tk.WORD,
+            relief=tk.FLAT,
+            borderwidth=1,
+            height=8
+        )
+        paste_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Save open paths
-        self.tab_open_paths[self.current_tab] = self.collect_open_paths(tree)
+        # Scrollbar
+        scrollbar = tk.Scrollbar(text_frame, command=paste_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        paste_text.config(yscrollcommand=scrollbar.set)
 
-    def load_tab_state(self, tab_index):
-        """Load the specified tab's tree state (selection, open paths)"""
-        if tab_index == 0:
-            tree = self.favorites_tree
-        else:  # Tab 1
-            tree = self.tree
+        # Buttons frame
+        button_frame = tk.Frame(self.paste_content_frame, bg=self.bg_color)
+        button_frame.pack(fill=tk.X, pady=(0, 5), padx=10)
 
-        # Restore selection if exists
-        selected_path = self.tab_selections.get(tab_index)
-        if selected_path:
-            self.restore_tree_selection(tree, selected_path)
+        def create_file():
+            """Create file from pasted content"""
+            content = paste_text.get('1.0', tk.END).strip()
+            if not content:
+                from tkinter import messagebox
+                messagebox.showwarning("Empty Content", "Please paste some content first")
+                return
+
+            # Ask user where to save
+            try:
+                self.root.update_idletasks()
+            except Exception:
+                pass
+
+            save_path = filedialog.asksaveasfilename(
+                title="Save Paste File",
+                initialfile="pasted_content.md",
+                defaultextension=".md",
+                filetypes=[("Markdown", "*.md"), ("Text", "*.txt"), ("All Files", "*.*")]
+            )
+
+            if not save_path:
+                return  # User cancelled
+
+            try:
+                # Parse content into cells
+                self.cells = []
+                self.parse_paste_cells(content)
+
+                # Reconstruct file content with headings
+                file_content = '\n\n'.join(self.cells)
+
+                # Write to file
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    f.write(file_content)
+
+                # Collapse paste menu
+                self.toggle_accordion_item('paste')
+
+                # Open the file in viewer
+                self.display_file(save_path)
+
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showerror("Error", f"Failed to create file: {e}")
+
+        create_button = tk.Button(
+            button_frame,
+            text="Create File",
+            bg=self.button_color,
+            fg=self.button_text_color,
+            activebackground=self.button_active_color,
+            activeforeground=self.button_text_color,
+            font=('Consolas', 9, 'bold'),
+            relief=tk.RAISED,
+            padx=15,
+            pady=3,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=create_file
+        )
+        create_button.pack(side=tk.LEFT)
+
+    def build_settings_inline_ui(self):
+        """Build the settings UI inline in the accordion"""
+        self.settings_content_frame.config(bg=self.border_color, padx=10, pady=10)
+
+        # Home Directory setting
+        tk.Label(
+            self.settings_content_frame,
+            text="Home Directory:",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 9, 'bold')
+        ).pack(pady=(5, 3), anchor='w')
+
+        home_frame = tk.Frame(self.settings_content_frame, bg=self.border_color)
+        home_frame.pack(fill=tk.X, pady=3)
+
+        self.home_entry = tk.Entry(
+            home_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Consolas', 8),
+            width=25
+        )
+        self.home_entry.insert(0, self.home_directory)
+        self.home_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+
+        def browse_directory():
+            from tkinter import filedialog
+            directory = filedialog.askdirectory(initialdir=self.home_directory)
+            if directory:
+                self.home_entry.delete(0, tk.END)
+                self.home_entry.insert(0, directory)
+
+        tk.Button(
+            home_frame,
+            text="...",
+            bg="#cccccc",
+            fg="#000000",
+            font=('Consolas', 8),
+            relief=tk.RAISED,
+            padx=6,
+            pady=1,
+            command=browse_directory
+        ).pack(side=tk.LEFT)
+
+        # Voice Speed setting
+        tk.Label(
+            self.settings_content_frame,
+            text="Voice Speed:",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 9, 'bold')
+        ).pack(pady=(10, 3), anchor='w')
+
+        speed_frame = tk.Frame(self.settings_content_frame, bg=self.border_color)
+        speed_frame.pack(fill=tk.X, pady=3)
+
+        self.speed_entry = tk.Entry(
+            speed_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Consolas', 8),
+            width=10
+        )
+        self.speed_entry.insert(0, str(self.voice_speed))
+        self.speed_entry.pack(side=tk.LEFT)
+
+        tk.Label(
+            speed_frame,
+            text=" words/min",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 8)
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
+        # OpenAI API Key setting
+        tk.Label(
+            self.settings_content_frame,
+            text="OpenAI API Key:",
+            bg=self.border_color,
+            fg=self.fg_color,
+            font=('Consolas', 9, 'bold')
+        ).pack(pady=(10, 3), anchor='w')
+
+        self.api_key_entry = tk.Entry(
+            self.settings_content_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Consolas', 8),
+            show="*",
+            width=30
+        )
+        self.api_key_entry.insert(0, self.openai_api_key)
+        self.api_key_entry.pack(fill=tk.X, pady=3)
+
+        # Export prompt checkbox
+        self.export_prompt_var = tk.BooleanVar(value=getattr(self, 'export_prompt', True))
+        tk.Checkbutton(
+            self.settings_content_frame,
+            text="Always prompt for save location on Cmd+E",
+            variable=self.export_prompt_var,
+            bg=self.border_color,
+            fg=self.fg_color,
+            selectcolor=self.bg_color,
+            activebackground=self.border_color,
+            activeforeground=self.fg_color,
+            font=('Consolas', 8)
+        ).pack(pady=(10, 5), anchor='w')
+
+        # Save button
+        def save_settings():
+            # Get new values
+            new_home = self.home_entry.get().strip()
+            new_speed = int(self.speed_entry.get().strip()) if self.speed_entry.get().strip().isdigit() else self.voice_speed
+            new_api_key = self.api_key_entry.get().strip()
+            export_prompt_value = '1' if self.export_prompt_var.get() else '0'
+
+            # Save to database
+            if new_home != self.home_directory:
+                self.home_directory = new_home
+                self.current_root = new_home
+                self.save_setting('home_directory', new_home)
+                self.path_entry.delete(0, tk.END)
+                self.path_entry.insert(0, new_home)
+                # Refresh directories tree with new home
+                self.tree.delete(*self.tree.get_children())
+                self.populate_directories_tree()
+
+            self.voice_speed = new_speed
+            self.save_setting('voice_speed', new_speed)
+
+            self.openai_api_key = new_api_key
+            self.save_setting('openai_api_key', new_api_key)
+
+            self.export_prompt = self.export_prompt_var.get()
+            self.save_setting('export_prompt', export_prompt_value)
+
+            # Collapse settings
+            self.toggle_accordion_item('settings')
+
+        tk.Button(
+            self.settings_content_frame,
+            text="Save Settings",
+            bg=self.button_color,
+            fg=self.button_text_color,
+            font=('Consolas', 9, 'bold'),
+            relief=tk.RAISED,
+            padx=15,
+            pady=4,
+            command=save_settings
+        ).pack(pady=(10, 5))
 
     def navigate_to_path(self, event):
         """Navigate to the path entered in the path entry"""
@@ -779,27 +1075,20 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         else:
             self.path_label.config(text=f"Error: '{path}' is not a valid directory")
 
-    def refresh_current_tab(self):
-        """Clear and repopulate the current tab's tree"""
-        if self.current_tab == 0:
-            self.favorites_tree.delete(*self.favorites_tree.get_children())
-            self.populate_favorites()
-        else:  # Tab 1: Directories
-            self.tree.delete(*self.tree.get_children())
-            self.populate_directories_tree(path=self.current_root)
-
     def refresh_tree_manual(self, event=None):
-        """Manually refresh all tabs (triggered by Command+R)"""
-        # Refresh both tabs
+        """Manually refresh all trees (triggered by Command+R)"""
+        # Refresh favorites
         self.favorites_tree.delete(*self.favorites_tree.get_children())
         self.populate_favorites()
 
-        self.tree.delete(*self.tree.get_children())
-        self.populate_directories_tree(path=self.current_root)
+        # Refresh directories if expanded
+        if self.expanded_menu_item == 'directories':
+            self.tree.delete(*self.tree.get_children())
+            self.populate_directories_tree(path=self.current_root)
 
         # Show brief confirmation in path label
         original_text = self.path_label.cget('text')
-        self.path_label.config(text="🔄 Tabs refreshed")
+        self.path_label.config(text="🔄 Trees refreshed")
 
         def reset_label():
             self.path_label.config(text=original_text)
@@ -922,7 +1211,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 # Show all files and directories (no filter)
 
                 display_name = f'⭐ {item}' if self.is_starred(item_path) else item
-                open_paths = self.tab_open_paths.get(1, set())  # Tab 1 is Directories
+                open_paths = self.directories_open_paths  # Directories tree open paths
 
                 node = self.tree.insert(
                     parent,
@@ -1004,7 +1293,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 is_dir = os.path.isdir(item_path)
 
                 display_name = f'⭐ {item}' if self.is_starred(item_path) else item
-                open_paths = self.tab_open_paths.get(0, set())  # Tab 0 is Favorites
+                open_paths = self.favorites_open_paths  # Favorites tree open paths
 
                 node = self.favorites_tree.insert(
                     parent,
@@ -1277,7 +1566,7 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 self.py_outline.focus_set()
             else:
                 # Focus on left panel (current tab's tree)
-                self.focus_current_tab_tree()
+                self.focus_current_tree()
         else:
             # Normal mode: toggle between left tabs and text widget
             self.focus_on_reader = not self.focus_on_reader
@@ -1287,16 +1576,17 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 self.text_widget.focus_set()
             else:
                 # Focus on left panel (current tab's tree)
-                self.focus_current_tab_tree()
+                self.focus_current_tree()
 
         return 'break'
 
-    def focus_current_tab_tree(self):
-        """Focus the tree of the currently active tab"""
-        if self.current_tab == 0:
-            self.favorites_tree.focus_set()
-        else:  # Tab 1: Directories
+    def focus_current_tree(self):
+        """Focus the appropriate tree (favorites or expanded accordion item)"""
+        if self.expanded_menu_item == 'directories':
             self.tree.focus_set()
+        else:
+            # Default to favorites tree (always visible)
+            self.favorites_tree.focus_set()
 
     def save_annotated_file(self, event):
         """Save an annotated version of the current markdown file with comments embedded.

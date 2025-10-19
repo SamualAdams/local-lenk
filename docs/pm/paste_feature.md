@@ -6,10 +6,9 @@ The paste-to-cells feature allows users to quickly convert pasted text content i
 ## User Workflow
 
 ### 1. Creating a Paste File
-- User clicks **"📋 New Paste"** button in the left pane toolbar
-- A paste dialog window appears with a large text area
+- User clicks **"📋 New Paste"** accordion menu item in the left pane
+- The paste interface expands inline below the menu header
 - User pastes their content (any text, code blocks, lists, etc.)
-- Preview shows how content will be split into cells
 - User clicks "Create File" to save
 
 ### 2. File Creation
@@ -56,25 +55,31 @@ Auto-generated markdown structure with headings:
 
 ## UI Specifications
 
-### New Paste Button
-- Location: Left pane toolbar, next to "Go" button
-- Icon: 📋
-- Label: "New Paste"
-- Styling: Matches existing toolbar buttons
+### Left Pane Layout
+The left pane now uses an accordion menu structure:
 
-### Paste Dialog Window
-- **Size**: 600x400 minimum, resizable
-- **Components**:
-  - Text area for input (monospace font recommended)
-  - **Preview section**: Shows cell count and first few cells
-  - **"Create File" button**: Primary action
-  - **"Cancel" button**: Close without saving
+**Top Section (Always Visible)**:
+- Path entry + "Go" button
+- ⭐ **Favorites** tree (always expanded, always visible)
 
-### Preview Display
-Shows:
-- Total cell count
-- First 3-4 cells as preview (truncated if too long)
-- Visual separator between cells (e.g., "---")
+**Bottom Section (Accordion Menu)**:
+- 📁 **Directories** (expandable) - Shows directory tree when expanded
+- 📋 **New Paste** (expandable) - Shows paste interface when expanded
+- ⚙️ **Settings** (expandable) - Shows settings when expanded
+- ⌨️ **Shortcuts** button (bottom, not expandable)
+
+### Accordion Behavior
+- Click a menu header to expand/collapse it
+- Only one accordion item expanded at a time
+- Click again to collapse
+- Arrow indicators: ▶ (collapsed) / ▼ (expanded)
+
+### Paste Interface (Inline)
+When "📋 New Paste" is expanded:
+- **Text area**: 8 lines tall, monospace font, scrollable
+- **"Create File" button**: Prompts for save location
+- Content is split by blank lines into cells
+- File is created as .md with auto-generated cell headings
 
 ## Integration with Existing Features
 
