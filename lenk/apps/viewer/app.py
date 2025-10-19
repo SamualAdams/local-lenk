@@ -1833,8 +1833,11 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                 if self.cells:
                     self.display_current_cell()
             elif file_path.endswith('.py'):
-                # Switch to Python outline mode
-                self.show_python_view(file_path, content)
+                # Show Python as plain text initially (render outline on demand)
+                self.show_text_view()
+                self.text_widget.insert('1.0', content)
+                # Show render button for Python files
+                self.show_python_render_button()
             else:
                 self.show_text_view()
                 self.text_widget.insert('1.0', content)
@@ -1851,6 +1854,62 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Show text frame
         if not self.text_frame.winfo_ismapped():
             self.text_frame.pack(fill=tk.BOTH, expand=True)
+
+    def show_python_render_button(self):
+        """Show a button to render Python code outline on demand."""
+        # Create button frame at the top
+        button_frame = tk.Frame(self.text_widget, bg=self.bg_color)
+        self.text_widget.window_create('1.0', window=button_frame)
+
+        # Create render button
+        render_button = tk.Button(
+            button_frame,
+            text="📊 Render Code Outline",
+            bg=self.button_color,
+            fg=self.button_text_color,
+            activebackground=self.button_active_color,
+            activeforeground=self.button_text_color,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED,
+            padx=20,
+            pady=8,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=self.render_current_python_file
+        )
+        render_button.pack(pady=5)
+
+        # Add instruction text
+        instruction_label = tk.Label(
+            button_frame,
+            text="Click to parse Python file and show class/function outline",
+            bg=self.bg_color,
+            fg="#888888",
+            font=('Consolas', 9)
+        )
+        instruction_label.pack(pady=(0, 10))
+
+        # Add separator line
+        separator = tk.Frame(button_frame, bg=self.border_color, height=2)
+        separator.pack(fill=tk.X, pady=(0, 10))
+
+    def render_current_python_file(self):
+        """Parse and render the current Python file's outline view."""
+        if not self.current_file or not self.current_file.endswith('.py'):
+            return
+
+        try:
+            # Read the file content
+            with open(self.current_file, 'r', encoding='utf-8') as f:
+                content = f.read()
+
+            # Call the existing Python view rendering
+            self.show_python_view(self.current_file, content)
+        except Exception as e:
+            # Show error in text view
+            self.text_widget.delete('1.0', tk.END)
+            self.text_widget.insert('1.0', f"Error rendering Python file:\n{str(e)}")
 
     def show_python_view(self, file_path, content):
         """Show the Python outline + code viewer for the given file content."""
