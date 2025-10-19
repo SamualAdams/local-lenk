@@ -74,17 +74,12 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             anchor='w'
         ).pack(fill=tk.X, pady=(0, 5))
 
-        # Favorites tree with scrollbar
-        favorites_scroll = tk.Scrollbar(favorites_frame, bg=self.bg_color)
-        favorites_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
+        # Favorites tree without scrollbar
         self.favorites_tree = ttk.Treeview(
             favorites_frame,
-            yscrollcommand=favorites_scroll.set,
             selectmode='browse'
         )
         self.favorites_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        favorites_scroll.config(command=self.favorites_tree.yview)
 
         # Separator line
         separator = tk.Frame(left_frame, bg=self.border_color, height=2)
@@ -159,17 +154,12 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         )
         self.md_button.pack(side=tk.LEFT)
 
-        # File tree with scrollbar
-        tree_scroll = tk.Scrollbar(browser_frame, bg=self.bg_color)
-        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
+        # File tree without scrollbar
         self.tree = ttk.Treeview(
             browser_frame,
-            yscrollcommand=tree_scroll.set,
             selectmode='browse'
         )
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        tree_scroll.config(command=self.tree.yview)
 
         # Settings panel (collapsible) at bottom
         self.settings_panel = tk.Frame(left_frame, bg=self.border_color, relief=tk.FLAT)
@@ -256,13 +246,10 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         )
         self.path_label.pack(fill=tk.X)
 
-        # Text widget with scrollbar for file content (default viewer)
+        # Text widget without scrollbar for file content (default viewer)
         text_frame = tk.Frame(right_frame, bg=self.bg_color)
         text_frame.pack(fill=tk.BOTH, expand=True)
         self.text_frame = text_frame
-
-        text_scroll = tk.Scrollbar(text_frame, bg=self.bg_color)
-        text_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.text_widget = tk.Text(
             text_frame,
@@ -273,27 +260,20 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             font=('Consolas', 11),
             wrap=tk.WORD,
             padx=10,
-            pady=10,
-            yscrollcommand=text_scroll.set
+            pady=10
         )
         self.text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        text_scroll.config(command=self.text_widget.yview)
 
         # Python outline + code viewer (lazy toggled)
         self.py_frame = tk.PanedWindow(right_frame, orient=tk.HORIZONTAL, bg=self.bg_color, sashwidth=5, sashrelief=tk.FLAT)
         # Left: outline tree
         outline_container = tk.Frame(self.py_frame, bg=self.bg_color)
-        outline_scroll = tk.Scrollbar(outline_container, bg=self.bg_color)
-        outline_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-        self.py_outline = ttk.Treeview(outline_container, yscrollcommand=outline_scroll.set, selectmode='browse')
+        self.py_outline = ttk.Treeview(outline_container, selectmode='browse')
         self.py_outline.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        outline_scroll.config(command=self.py_outline.yview)
         self.py_frame.add(outline_container, width=280)
 
         # Right: code/details
         code_container = tk.Frame(self.py_frame, bg=self.bg_color)
-        code_scroll = tk.Scrollbar(code_container, bg=self.bg_color)
-        code_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.py_text = tk.Text(
             code_container,
             bg=self.bg_color,
@@ -303,11 +283,9 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             font=('Consolas', 11),
             wrap=tk.NONE,
             padx=10,
-            pady=10,
-            yscrollcommand=code_scroll.set
+            pady=10
         )
         self.py_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        code_scroll.config(command=self.py_text.yview)
         self.py_frame.add(code_container)
 
         # Hide Python view by default; shown for .py files
@@ -824,19 +802,14 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         tk.Label(container, text="Keyboard Shortcuts", bg=self.bg_color, fg=self.fg_color,
                  font=('Consolas', 14, 'bold')).pack(anchor='w', pady=(0, 8))
 
-        scroll = tk.Scrollbar(container)
-        scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
         text = tk.Text(container,
                        bg=self.border_color,
                        fg=self.fg_color,
                        insertbackground=self.fg_color,
                        wrap=tk.WORD,
                        height=24,
-                       relief=tk.FLAT,
-                       yscrollcommand=scroll.set)
+                       relief=tk.FLAT)
         text.pack(fill=tk.BOTH, expand=True)
-        scroll.config(command=text.yview)
 
         # Sections and shortcuts
         sections = [
