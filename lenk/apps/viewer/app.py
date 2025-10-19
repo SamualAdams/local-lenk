@@ -107,6 +107,25 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         )
         nav_button.pack(side=tk.LEFT)
 
+        # New Paste button
+        paste_button = tk.Button(
+            path_frame,
+            text="📋 New Paste",
+            bg=self.button_color,
+            fg=self.button_text_color,
+            activebackground=self.button_active_color,
+            activeforeground=self.button_text_color,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED,
+            padx=15,
+            pady=2,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=self.show_paste_dialog
+        )
+        paste_button.pack(side=tk.LEFT, padx=(5, 0))
+
         # Create tabbed notebook
         style = ttk.Style()
         style.configure('TNotebook', background=self.bg_color, borderwidth=0)
@@ -1820,6 +1839,225 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
         # Limit number of cells to prevent UI freeze
         if len(self.cells) > 1000:
             self.cells = self.cells[:1000] + ["[Remaining cells truncated - file too large]"]
+
+    def parse_paste_cells(self, content):
+        """Parse pasted content into cells based on blank line separation"""
+        # Safety limit - don't parse files that are too large
+        if len(content) > 5 * 1024 * 1024:  # 5MB text limit
+            self.cells = ["[File too large to parse into cells - displaying as single block]", content[:100000]]
+            return
+
+        # Split by blank lines (2+ consecutive newlines)
+        # First, normalize line endings
+        content = content.replace('\r\n', '\n').replace('\r', '\n')
+
+        # Split by blank lines (one or more empty lines)
+        import re
+        blocks = re.split(r'\n\s*\n', content.strip())
+
+        # Filter out empty blocks and create cells with auto-generated headings
+        self.cells = []
+        for i, block in enumerate(blocks, 1):
+            block = block.strip()
+            if block:  # Skip empty blocks
+                # Add auto-generated heading
+                heading = f'# Cell {i}'
+                cell_content = f'{heading}\n{block}'
+                self.cells.append(cell_content)
+
+        if not self.cells:
+            self.cells = [content]
+
+        # Limit number of cells to prevent UI freeze
+        if len(self.cells) > 1000:
+            self.cells = self.cells[:1000] + ["[Remaining cells truncated - file too large]"]
+
+    def show_paste_dialog(self):
+        """Show a dialog to paste content and create a new file"""
+        # Create a new top-level window
+        dialog = tk.Toplevel(self.root)
+        dialog.title("New Paste")
+        dialog.geometry("600x400")
+        dialog.configure(bg=self.bg_color)
+
+        # Main frame
+        main_frame = tk.Frame(dialog, bg=self.bg_color)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Instruction label
+        label = tk.Label(
+            main_frame,
+            text="Paste your content below (split by blank lines into cells):",
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Consolas', 10)
+        )
+        label.pack(fill=tk.X, pady=(0, 5))
+
+        # Text area for pasting
+        text_frame = tk.Frame(main_frame, bg=self.border_color)
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        paste_text = tk.Text(
+            text_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            insertbackground=self.fg_color,
+            font=('Consolas', 10),
+            wrap=tk.WORD,
+            relief=tk.FLAT,
+            borderwidth=1
+        )
+        paste_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Scrollbar
+        scrollbar = tk.Scrollbar(text_frame, command=paste_text.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        paste_text.config(yscrollcommand=scrollbar.set)
+
+        # Preview label and frame
+        preview_label = tk.Label(
+            main_frame,
+            text="Preview (how content will be split into cells):",
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Consolas', 9)
+        )
+        preview_label.pack(fill=tk.X, pady=(0, 5))
+
+        preview_frame = tk.Frame(main_frame, bg=self.border_color, relief=tk.FLAT, borderwidth=1)
+        preview_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+
+        preview_text = tk.Text(
+            preview_frame,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=('Consolas', 9),
+            wrap=tk.WORD,
+            relief=tk.FLAT,
+            borderwidth=0,
+            height=4,
+            state=tk.DISABLED
+        )
+        preview_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        def update_preview(event=None):
+            """Update preview as user types"""
+            content = paste_text.get('1.0', tk.END).strip()
+            preview_text.config(state=tk.NORMAL)
+            preview_text.delete('1.0', tk.END)
+
+            if not content:
+                preview_text.insert(tk.END, "(paste content to see preview)")
+                preview_text.config(state=tk.DISABLED)
+                return
+
+            # Parse and show preview
+            import re
+            blocks = re.split(r'\n\s*\n', content)
+            cell_count = len([b for b in blocks if b.strip()])
+
+            preview_lines = [f"Total cells: {cell_count}\n", "---\n"]
+            for i, block in enumerate(blocks[:4], 1):
+                block = block.strip()
+                if block:
+                    # Truncate preview
+                    preview_block = block[:100]
+                    if len(block) > 100:
+                        preview_block += "..."
+                    preview_lines.append(f"# Cell {i}\n{preview_block}\n---\n")
+
+            preview_text.insert(tk.END, ''.join(preview_lines))
+            preview_text.config(state=tk.DISABLED)
+
+        # Bind to text changes
+        paste_text.bind('<KeyRelease>', update_preview)
+
+        # Buttons frame
+        button_frame = tk.Frame(main_frame, bg=self.bg_color)
+        button_frame.pack(fill=tk.X, pady=(0, 0))
+
+        def create_file():
+            """Create file from pasted content"""
+            content = paste_text.get('1.0', tk.END).strip()
+            if not content:
+                from tkinter import messagebox
+                messagebox.showwarning("Empty Content", "Please paste some content first")
+                return
+
+            # Ask user where to save
+            try:
+                self.root.update_idletasks()
+            except Exception:
+                pass
+
+            save_path = filedialog.asksaveasfilename(
+                title="Save Paste File",
+                initialfile="pasted_content.md",
+                defaultextension=".md",
+                filetypes=[("Markdown", "*.md"), ("Text", "*.txt"), ("All Files", "*.*")]
+            )
+
+            if not save_path:
+                return  # User cancelled
+
+            try:
+                # Parse content into cells
+                self.cells = []
+                self.parse_paste_cells(content)
+
+                # Reconstruct file content with headings
+                file_content = '\n\n'.join(self.cells)
+
+                # Write to file
+                with open(save_path, 'w', encoding='utf-8') as f:
+                    f.write(file_content)
+
+                # Close dialog
+                dialog.destroy()
+
+                # Open the file in viewer
+                self.display_file(save_path)
+
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showerror("Error", f"Failed to create file: {e}")
+
+        create_button = tk.Button(
+            button_frame,
+            text="Create File",
+            bg=self.button_color,
+            fg=self.button_text_color,
+            activebackground=self.button_active_color,
+            activeforeground=self.button_text_color,
+            font=('Consolas', 10, 'bold'),
+            relief=tk.RAISED,
+            padx=20,
+            pady=5,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=create_file
+        )
+        create_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        cancel_button = tk.Button(
+            button_frame,
+            text="Cancel",
+            bg="#cccccc",
+            fg=self.button_text_color,
+            activebackground="#aaaaaa",
+            activeforeground=self.button_text_color,
+            font=('Consolas', 10),
+            relief=tk.RAISED,
+            padx=20,
+            pady=5,
+            cursor='hand2',
+            borderwidth=1,
+            highlightthickness=0,
+            command=dialog.destroy
+        )
+        cancel_button.pack(side=tk.LEFT)
 
     def display_file(self, file_path):
         """Display file content"""
