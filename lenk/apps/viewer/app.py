@@ -987,6 +987,15 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             if item.startswith('.'):
                 continue
 
+            # Hide Python dunder files/directories (__name__ or __name__.py)
+            if item.startswith('__'):
+                # For directories, check if ends with __
+                if item.endswith('__'):
+                    continue
+                # For .py files, check if the name without .py ends with __
+                if item.endswith('.py') and item[:-3].endswith('__'):
+                    continue
+
             item_path = os.path.join(path, item)
 
             try:
@@ -1066,6 +1075,15 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
             if item.startswith('.'):
                 continue
 
+            # Hide Python dunder files/directories (__name__ or __name__.py)
+            if item.startswith('__'):
+                # For directories, check if ends with __
+                if item.endswith('__'):
+                    continue
+                # For .py files, check if the name without .py ends with __
+                if item.endswith('.py') and item[:-3].endswith('__'):
+                    continue
+
             item_path = os.path.join(path, item)
 
             try:
@@ -1074,8 +1092,6 @@ class FileViewer(DatabaseMixin, NavigationStateMixin, CommentAudioMixin):
                     continue
 
                 is_dir = os.path.isdir(item_path)
-
-                # Favorites tab shows all files (no filter)
 
                 display_name = f'⭐ {item}' if self.is_starred(item_path) else item
                 open_paths = self.tab_open_paths.get(0, set())  # Tab 0 is Favorites
